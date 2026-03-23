@@ -130,10 +130,34 @@ export function cleanMessageContent(content: string): string {
   return cleaned.trim();
 }
 
+/**
+ * Returns true if the message should be dropped entirely.
+ * Patterns starting with "/" are treated as anchored regexes (e.g. "/^HEARTBEAT/i").
+ * All other patterns match by exact equality or prefix (startsWith).
+ */
+export function shouldSkipMessage(content: string, noisePatterns: string[]): boolean {
+  return noisePatterns.some((pattern) => {
+    if (pattern.startsWith("/")) {
+      const lastSlash = pattern.lastIndexOf("/", pattern.length - 1);
+      if (lastSlash > 0) {
+        const source = pattern.slice(1, lastSlash);
+        const flags = pattern.slice(lastSlash + 1);
+        try {
+          return new RegExp(source, flags).test(content);
+        } catch {
+          // fall through to literal match if regex is invalid
+        }
+      }
+    }
+    return content === pattern || content.startsWith(pattern);
+  });
+}
+
 export function extractMessages(
   rawMessages: unknown[],
   ownerPeer: Peer,
-  agentPeer: Peer
+  agentPeer: Peer,
+  noisePatterns: string[] = []
 ): MessageInput[] {
   const result: MessageInput[] = [];
 
@@ -162,6 +186,9 @@ export function extractMessages(
 
     content = cleanMessageContent(content);
     content = content.trim();
+
+    if (!content) continue;
+    if (shouldSkipMessage(content, noisePatterns)) continue;
 
     if (content) {
       const peer = role === "user" ? ownerPeer : agentPeer;
