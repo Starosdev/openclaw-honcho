@@ -5,8 +5,7 @@ on:
     branches: [main]
     paths:
       - "package.json"
-      - "src/**"
-      - "*.ts"
+      - "**/*.ts"
 
 jobs:
   publish:
@@ -30,19 +29,34 @@ jobs:
 
       - run: pnpm build
 
-      # Check if this version is already published
-      - name: Check if version exists on npm
+      # Validate version and ensure it advances npm latest
+      - name: Validate package version against npm
         id: version-check
         run: |
           LOCAL_VERSION=$(node -p "require('./package.json').version")
           echo "local=$LOCAL_VERSION" >> "$GITHUB_OUTPUT"
-          PUBLISHED=$(npm view "@honcho-ai/openclaw-honcho@${LOCAL_VERSION}" version 2>/dev/null || echo "")
-          if [ "$PUBLISHED" = "$LOCAL_VERSION" ]; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "Version $LOCAL_VERSION already on npm — skipping publish"
-          else
+
+          LATEST_VERSION=$(npm view "@honcho-ai/openclaw-honcho" version 2>/dev/null || echo "")
+          echo "latest=$LATEST_VERSION" >> "$GITHUB_OUTPUT"
+
+          npx semver "$LOCAL_VERSION" >/dev/null || {
+            echo "::error::package.json version \"$LOCAL_VERSION\" is not valid semver"
+            exit 1
+          }
+
+          if [ -z "$LATEST_VERSION" ]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Version $LOCAL_VERSION not on npm — will publish"
+            echo "No published version found on npm — will publish $LOCAL_VERSION"
+            exit 0
+          fi
+
+          if npx semver "$LOCAL_VERSION" -r ">$LATEST_VERSION" >/dev/null; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Version $LOCAL_VERSION is greater than npm latest $LATEST_VERSION — will publish"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Version $LOCAL_VERSION must be greater than npm latest $LATEST_VERSION"
+            exit 1
           fi
 
       - name: Publish to npm
