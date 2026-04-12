@@ -68,6 +68,7 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
     apiKey: cfg.apiKey,
     baseURL: cfg.baseUrl,
     workspaceId: cfg.workspaceId,
+    timeout: cfg.timeoutMs,
   });
 
   // Promise-based init lock to prevent concurrent ensureInitialized() races.
