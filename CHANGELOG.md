@@ -2,6 +2,32 @@
 
 All notable changes to `@honcho-ai/openclaw-honcho` will be documented in this file.
 
+## [1.4.0] - 2026-04-15
+
+Minor version bump: introduces per-sender participant peers for group-chat
+scenarios. Single-user deployments behave the same — messages without a
+`sender_id` still flow to the default owner peer.
+
+### Added
+- **Multi-peer support for group chats (#68)**: User messages now carry per-sender attribution. `extractSenderId` parses `sender_id` (falling back to `sender`) from the leading `Conversation info (untrusted metadata):` block of an inbound message, and capture resolves a distinct Honcho peer per sender. Each participant is its own peer (the channel peer ID is used directly as the Honcho peer ID). Messages without a `sender_id` continue to go to the default owner peer, so DMs are unaffected.
+- **`-p, --peer <id>` flag on `honcho ask` and `honcho search` CLI commands**: Target a specific participant peer when querying (defaults to owner). Useful for group-chat deployments where the operator wants to inspect memory from the perspective of a single participant.
+- **Manual `peerMappings` config**: A `sender_id` → Honcho peer ID map in the plugin config. Unmapped senders still use their `sender_id` directly (no behavior change), but operators can alias platform IDs to friendlier peer IDs (or merge two channel identities onto one peer). Edits to `openclaw.json` take effect on gateway restart; the plugin does not write the file itself. See `README.md` § Peer Mappings.
+- **`crossSessionSearch` in the plugin manifest (`openclaw.plugin.json`)**: The option existed in code since 1.3.0 but was missing from `configSchema`/`uiHints`, causing OpenClaw config validation to reject it. Now declared with `default: true`.
+- **Session metadata fields `participantSenderId` and `participantSenderIds`**: Capture records the last active sender (for default tool resolution) and the full set of known senders in the session. Named "sender" (not "peer") to keep raw channel IDs distinguishable from resolved Honcho peer IDs.
+- **`extractSenderId` unit tests (`helpers.test.ts`)**: Cover the happy path, missing blocks (DMs), malformed JSON, duplicate sentinels (user-pasted metadata), and `sender_id`/`sender` fallback.
+
+### Changed
+- **`ownerPeer` → participant peer abstraction**: `state.ownerPeer` is replaced by a `participantPeers: Map<string, Peer>` cache plus `getParticipantPeer(channelPeerId?)`, `resolveSessionParticipantPeer(sessionKey)`, and `isParticipantPeerId(peerId)` helpers. Callers that previously reached for `state.ownerPeer!` now resolve through these helpers. The "participant" naming intentionally generalizes over humans and non-agent bots.
+- **Context hook (`before_prompt_build`) uses the inbound message's sender**: Previously it relied on session metadata, which still reflects the prior speaker on turn start. `extractSenderId(event.prompt)` is now consulted first so context is built against the *current* speaker's representation — the prior behavior silently mis-targeted context in group chats whenever the speaker changed.
+- **Capture resolves participant peers in parallel**: `Promise.all` over the unique sender IDs in a batch, avoiding a sequential await bottleneck in group chats.
+- **`extractMessages` signature**: Takes a `defaultParticipantPeer` plus an optional `resolvePeer(senderId)` callback instead of a single `ownerPeer`. Callers outside of capture (tests, future consumers) can pass no resolver to preserve pre-1.4.0 behavior.
+
+### Fixed
+- **Concurrent `ensureInitialized()` races could corrupt workspace metadata**: Init is now guarded by a shared promise so concurrent hook entries await the same initialization; errors propagate to all waiters.
+
+### Migration Notes
+Historical owner-attributed messages in existing sessions are **not** rewritten. After upgrade, context queries against pre-existing sessions will show attribution mixed across the upgrade boundary — e.g., `owner said X, then real-user Y said Z` — because older turns retain their original owner attribution while new turns use per-sender peer IDs. This is acceptable; operators running multi-participant deployments should be aware.
+
 ## [1.3.2] - 2026-04-09
 
 ### Added

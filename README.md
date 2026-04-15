@@ -70,6 +70,7 @@ Run `openclaw honcho setup` to configure interactively, or set values directly i
 | `disableDefaultNoisePatterns` | `boolean` | `false`           | When `true`, built-in noise patterns are not applied — only `noisePatterns` entries are used. |
 | `crossSessionSearch`   | `boolean`  | `true`                     | Allow `memory_search` and `memory_get` to access any session. Set to `false` to restrict to the active session and its children. |
 | `ownerObserveOthers`   | `boolean`  | `false`                    | Whether the owner peer observes agent messages in Honcho's social model. |
+| `peerMappings`         | `object`   | `{}`                       | Manual `sender_id` → Honcho peer ID map (see [Peer Mappings](#peer-mappings)). |
 
 ### Self-Hosted / Local Honcho
 
@@ -110,13 +111,38 @@ Honcho's `observeOthers` controls whether a peer forms representations of other 
 
 Set `ownerObserveOthers: true` to let the owner peer also observe agent messages. This gives Honcho perspective-aware memory: the owner stores conclusions about the agent based only on what it witnessed, enabling the user's representation to reflect the full conversational context rather than just their own side of it.
 
+### Peer Mappings
+
+By default, each inbound `sender_id` is used directly as the Honcho peer ID. If you want to alias a platform-specific sender ID to a friendlier Honcho peer (or merge two channel identities into one peer), add a `peerMappings` entry to the plugin config:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "openclaw-honcho": {
+        "config": {
+          "peerMappings": {
+            "U01ZB5DG019": "abigail",
+            "telegram-8461078551": "abigail"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+- **Manual only.** Edits to `peerMappings` take effect on gateway restart (`openclaw gateway restart`). The plugin does not write back to `openclaw.json`.
+- **Unmapped senders pass through.** If a `sender_id` has no entry, it is used as the Honcho peer ID unchanged — matching the default behavior.
+- **Adding a mapping after messages exist splits history.** Messages already stored under the raw `sender_id` stay there; new messages land under the mapped peer. Remapping is most useful when set up before the peer accumulates history.
+
 ### Multi-Peer Participants
 
 In group chats (Discord, Slack, etc.), the plugin extracts the sender's platform ID from each inbound message and uses it directly as the Honcho peer ID. This gives every participant — humans and any other bots in the room — their own memory and representation in Honcho, rather than attributing all non-agent messages to a single generic peer.
 
 **How it works:**
 - The plugin reads the `sender_id` field from OpenClaw's "Conversation info (untrusted metadata):" block, which OpenClaw injects on every inbound message that has a known sender — including 1-on-1 DMs on platforms like Telegram, not just group chats.
-- Each distinct sender ID becomes its own Honcho peer (e.g., `U07KX7DG002` becomes the Honcho peer ID directly).
+- Each distinct sender ID becomes its own Honcho peer (e.g., `U07KX7DG002` becomes the Honcho peer ID directly). You can alias a sender to a friendlier peer ID via [`peerMappings`](#peer-mappings).
 - The default `owner` peer is only used as a fallback when a message has no sender metadata at all (e.g., synthetic/system messages, or channel integrations that don't emit a `Conversation info` block). On platforms like Telegram, even DMs are attributed to the sender's own peer, not `owner`.
 - Each OpenClaw agent gets its own Honcho peer (default `agent-{id}`, e.g., `agent-main`).
 - All tools (`honcho_context`, `honcho_ask`, etc.) automatically resolve the correct peer for the current session.
@@ -129,7 +155,7 @@ Once installed, the plugin works automatically:
 
 - **Message Observation** — After every AI turn, the conversation is persisted to Honcho. Both user and agent messages are observed, allowing Honcho to build and refine its models. Message capture starts when the plugin is active for a session, and preserves original timestamps for captured messages. Messages are also flushed before session compaction and `/new`/`/reset`, so no conversation data is lost.
 - **Tool-Based Context Access** — The AI can query Honcho mid-conversation using tools like `honcho_context`, `honcho_search_conclusions`, and `honcho_ask` to retrieve relevant context about the user. Context is injected during OpenClaw's `before_prompt_build` phase, ensuring accurate turn boundaries.
-- **Multi-Peer Model** — Honcho maintains separate representations for each participant. Whenever an inbound message carries a `sender_id` (group chats, and DMs on platforms like Telegram), that sender gets their own peer, using their platform ID directly as the Honcho peer ID. Each OpenClaw agent gets its own Honcho peer (default `agent-{id}`). The default `owner` peer is only used as a fallback when a channel emits no sender metadata. This gives every participant isolated, personalized memory.
+- **Multi-Peer Model** — Honcho maintains separate representations for each participant. Whenever an inbound message carries a `sender_id` (group chats, and DMs on platforms like Telegram), that sender gets their own peer, using their platform ID directly as the Honcho peer ID (or aliased via [`peerMappings`](#peer-mappings) if configured). Each OpenClaw agent gets its own Honcho peer (default `agent-{id}`). The default `owner` peer is only used as a fallback when a channel emits no sender metadata. This gives every participant isolated, personalized memory.
 - **Clean Persistence** — Platform metadata (conversation info, sender headers, thread context, forwarded messages) is stripped before saving to Honcho, ensuring only meaningful content is persisted. Noise messages (heartbeat acks, cron boilerplate, startup commands) are dropped entirely via configurable pattern filters.
 
 Honcho handles all reasoning and synthesis in the cloud.

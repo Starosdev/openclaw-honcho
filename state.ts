@@ -145,13 +145,14 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
       return peer;
     }
 
-    // Check cache
+    // Cache is keyed by the inbound sender_id so lookups don't depend on
+    // whether the user has added/changed a mapping. The mapped Honcho peer
+    // ID (or the sender_id itself, when unmapped) is what's sent to the SDK.
     let peer = state.participantPeers.get(channelPeerId);
     if (peer) return peer;
 
-    // Use the channel peer ID directly as the Honcho peer ID — each participant
-    // is its own separate peer.
-    peer = await honcho.peer(channelPeerId, { metadata: { channelPeerId } });
+    const mappedPeerId = cfg.peerMappings[channelPeerId] ?? channelPeerId;
+    peer = await honcho.peer(mappedPeerId, { metadata: { channelPeerId } });
     state.participantPeers.set(channelPeerId, peer);
     return peer;
   }
