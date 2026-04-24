@@ -105,7 +105,7 @@ export type PeersPersisterOptions = {
  */
 export class PeersPersister {
   public readonly peers: Record<string, string>;
-  private readonly filePath: string;
+  public readonly filePath: string;
   private readonly debounceMs: number;
   private dirty = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
