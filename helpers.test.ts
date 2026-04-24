@@ -15,12 +15,12 @@ function metadataBlock(payload: Record<string, unknown>): string {
 describe("extractSenderId", () => {
   it("reads sender_id from a leading metadata block", () => {
     const content = [
-      metadataBlock({ sender_id: "U01ZB5DG019", channel: "C-foo" }),
+      metadataBlock({ sender_id: "U0EXAMPLE01", channel: "C-foo" }),
       "",
       "hello there",
     ].join("\n");
 
-    expect(extractSenderId(content)).toBe("U01ZB5DG019");
+    expect(extractSenderId(content)).toBe("U0EXAMPLE01");
   });
 
   it("trusts only the first sentinel and never considers later quoted blocks", () => {

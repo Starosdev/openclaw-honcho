@@ -122,8 +122,8 @@ By default, each inbound `sender_id` is used directly as the Honcho peer ID. If 
       "openclaw-honcho": {
         "config": {
           "peerMappings": {
-            "U01ZB5DG019": "abigail",
-            "telegram-8461078551": "abigail"
+            "U0EXAMPLE01": "user",
+            "telegram-1234567890": "user"
           }
         }
       }
