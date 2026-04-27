@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractSenderId } from "./helpers.js";
+import { extractSenderId } from "../helpers.js";
 
 const SENTINEL = "Conversation info (untrusted metadata):";
 

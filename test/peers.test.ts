@@ -9,7 +9,7 @@ import {
   loadPeersFileSync,
   resolvePeersFilePath,
   resolveParticipantPeerId,
-} from "./peers.js";
+} from "../peers.js";
 
 async function mktmp(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-peers-"));
