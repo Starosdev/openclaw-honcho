@@ -2,7 +2,7 @@
 
 All notable changes to `@honcho-ai/openclaw-honcho` will be documented in this file.
 
-## [1.4.0] - 2026-04-15
+## [1.4.0] - 2026-04-27
 
 Per-sender participant peers when the channel emits `sender_id` (group chats
 and many 1:1s — see README). No sender metadata → `owner` peer (operator/system
@@ -15,7 +15,7 @@ default to `"owner"` (pre-1.4.0 merge behavior); fresh installs default to
 - **Multi-peer**: `extractSenderId` parses `sender_id` from each inbound `Conversation info` block; both capture and `before_prompt_build` resolve a peer per sender from the current message, so the right participant is targeted on every turn — including when the speaker changes between turns. Peer IDs derive from the channel ID, sanitized to `[A-Za-z0-9_-]` and truncated to Honcho's 100-char limit. Switching `defaultUnknownPolicy` after the fact only affects new messages — already-captured messages stay where they originally landed.
 - **`-p, --peer <id>` on `honcho ask` and `honcho search`**: query memory from a specific participant's perspective.
 - **Peers file `~/.honcho/openclaw-peers.json`**: `sender_id` → peer ID map, auto-seeded by the plugin and hand-editable. Top-level `defaultUnknownPolicy` (`per-sender` for fresh installs, `owner` for legacy files without the field) controls auto-seeding; auto-seeded peers get `autoSeeded: true` metadata. Override path via `OPENCLAW_HONCHO_PEERS_FILE`.
-- **Session metadata `participantSenderId` / `participantSenderIds`**: last active sender + all known senders in the session.
+- **Session metadata `participantSenderId`**: last active sender, used by tools to resolve the session's current participant peer.
 
 ### Fixed
 - **`ensureInitialized()` race could corrupt workspace metadata**: now guarded by a shared init promise.
