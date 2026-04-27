@@ -34,7 +34,7 @@ export function resolvePeersFilePath(): string {
   return path.join(os.homedir(), ".honcho", "openclaw-peers.json");
 }
 
-function parsePeersJson(raw: string): PeersFile {
+function parsePeersJson(raw: string, filePath: string): PeersFile {
   try {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -49,8 +49,13 @@ function parsePeersJson(raw: string): PeersFile {
         peers,
       };
     }
-  } catch {
-    // fall through
+    console.warn(
+      `peers file ${filePath}: top-level value is not an object; falling back to legacy owner policy with empty map`,
+    );
+  } catch (err) {
+    console.warn(
+      `peers file ${filePath}: ${(err as Error).message}; falling back to legacy owner policy with empty map`,
+    );
   }
   // Existing-but-malformed file → preserve legacy contract.
   return { version: PEERS_FILE_VERSION, defaultUnknownPolicy: "owner", peers: {} };
@@ -59,7 +64,7 @@ function parsePeersJson(raw: string): PeersFile {
 /** Read the peers file. Missing → per-sender (fresh install); anything else → owner (legacy). */
 export async function loadPeersFile(filePath: string): Promise<PeersFile> {
   try {
-    return parsePeersJson(await fs.readFile(filePath, "utf8"));
+    return parsePeersJson(await fs.readFile(filePath, "utf8"), filePath);
   } catch (err) {
     return (err as NodeJS.ErrnoException)?.code === "ENOENT"
       ? { version: PEERS_FILE_VERSION, defaultUnknownPolicy: "per-sender", peers: {} }
@@ -69,7 +74,7 @@ export async function loadPeersFile(filePath: string): Promise<PeersFile> {
 
 export function loadPeersFileSync(filePath: string): PeersFile {
   try {
-    return parsePeersJson(readFileSync(filePath, "utf8"));
+    return parsePeersJson(readFileSync(filePath, "utf8"), filePath);
   } catch (err) {
     return (err as NodeJS.ErrnoException)?.code === "ENOENT"
       ? { version: PEERS_FILE_VERSION, defaultUnknownPolicy: "per-sender", peers: {} }

@@ -92,11 +92,14 @@ describe("loadPeersFile", () => {
     const dir = await mktmp();
     const file = path.join(dir, "peers.json");
     await fs.writeFile(file, "{ not valid json");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await expect(loadPeersFile(file)).resolves.toEqual({
       version: PEERS_FILE_VERSION,
       defaultUnknownPolicy: "owner",
       peers: {},
     });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(file));
+    warn.mockRestore();
   });
 });
 
