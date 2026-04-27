@@ -45,20 +45,22 @@ describe("resolvePeersFilePath", () => {
 });
 
 describe("loadPeersFile", () => {
-  it("returns an empty seed when the file is missing", async () => {
+  it("returns a per-sender seed when the file is missing (fresh install)", async () => {
     const dir = await mktmp();
     const missing = path.join(dir, "does", "not", "exist.json");
     await expect(loadPeersFile(missing)).resolves.toEqual({
       version: PEERS_FILE_VERSION,
+      defaultUnknownPolicy: "per-sender",
       peers: {},
     });
     expect(loadPeersFileSync(missing)).toEqual({
       version: PEERS_FILE_VERSION,
+      defaultUnknownPolicy: "per-sender",
       peers: {},
     });
   });
 
-  it("reads a well-formed file", async () => {
+  it("reads a legacy file (no policy field) as owner-policy", async () => {
     const dir = await mktmp();
     const file = path.join(dir, "peers.json");
     await fs.writeFile(
@@ -67,25 +69,45 @@ describe("loadPeersFile", () => {
     );
     await expect(loadPeersFile(file)).resolves.toEqual({
       version: 1,
+      defaultUnknownPolicy: "owner",
       peers: { "slack:U1": "owner", "slack:U2": "alice" },
     });
   });
 
-  it("tolerates malformed JSON by returning empty", async () => {
+  it("respects an explicit defaultUnknownPolicy field", async () => {
+    const dir = await mktmp();
+    const file = path.join(dir, "peers.json");
+    await fs.writeFile(
+      file,
+      JSON.stringify({ version: 1, defaultUnknownPolicy: "per-sender", peers: {} }),
+    );
+    await expect(loadPeersFile(file)).resolves.toEqual({
+      version: 1,
+      defaultUnknownPolicy: "per-sender",
+      peers: {},
+    });
+  });
+
+  it("treats malformed JSON in an existing file as legacy (owner) — never silently upgrades", async () => {
     const dir = await mktmp();
     const file = path.join(dir, "peers.json");
     await fs.writeFile(file, "{ not valid json");
     await expect(loadPeersFile(file)).resolves.toEqual({
       version: PEERS_FILE_VERSION,
+      defaultUnknownPolicy: "owner",
       peers: {},
     });
   });
 });
 
 describe("resolveParticipantPeerId", () => {
-  function persister(initial: Record<string, string> = {}) {
+  function persister(
+    initial: Record<string, string> = {},
+    defaultUnknownPolicy: "owner" | "per-sender" = "owner",
+  ) {
     return new PeersPersister("/dev/null", {
       version: PEERS_FILE_VERSION,
+      defaultUnknownPolicy,
       peers: { ...initial },
     });
   }
@@ -95,30 +117,48 @@ describe("resolveParticipantPeerId", () => {
     expect(resolveParticipantPeerId("slack:U1", p)).toBe("alice");
   });
 
-  it("returns owner (no enqueue) for a sender auto-seeded to owner", () => {
+  it("returns owner (no enqueue) for a sender already mapped to owner", () => {
     const p = persister({ "slack:U2": "owner" });
     const enqueueSpy = vi.spyOn(p, "enqueue");
     expect(resolveParticipantPeerId("slack:U2", p)).toBe("owner");
     expect(enqueueSpy).not.toHaveBeenCalled();
   });
 
-  it("enqueues unknown senders and returns owner", () => {
-    const p = persister({});
-    const enqueueSpy = vi.spyOn(p, "enqueue");
+  it("under owner policy: enqueues unknown senders as owner", () => {
+    const p = persister({}, "owner");
     expect(resolveParticipantPeerId("slack:U3", p)).toBe("owner");
-    expect(enqueueSpy).toHaveBeenCalledWith("slack:U3", "owner");
     expect(p.peers["slack:U3"]).toBe("owner");
+  });
+
+  it("under per-sender policy: derives a sanitized peer ID from the sender_id", () => {
+    const p = persister({}, "per-sender");
+    expect(resolveParticipantPeerId("slack:U07A.bot@team", p)).toBe("slack_U07A_bot_team");
+    expect(p.peers["slack:U07A.bot@team"]).toBe("slack_U07A_bot_team");
+  });
+
+  it("under per-sender policy: hand-mapped owner mappings still resolve to owner", () => {
+    const p = persister({ "slack:U5": "owner" }, "per-sender");
+    expect(resolveParticipantPeerId("slack:U5", p)).toBe("owner");
+  });
+
+  it("under per-sender policy: truncates to fit Honcho's 100-char peer ID limit", () => {
+    const p = persister({}, "per-sender");
+    const long = "x".repeat(200);
+    const id = resolveParticipantPeerId(long, p);
+    expect(id.length).toBeLessThanOrEqual(100);
+    expect(/^[a-zA-Z0-9_-]+$/.test(id)).toBe(true);
   });
 });
 
 describe("PeersPersister", () => {
+  function emptyFile(defaultUnknownPolicy: "owner" | "per-sender" = "owner") {
+    return { version: PEERS_FILE_VERSION, defaultUnknownPolicy, peers: {} } as const;
+  }
+
   it("enqueue is idempotent per sender", async () => {
     const dir = await mktmp();
     const file = path.join(dir, "peers.json");
-    const p = new PeersPersister(file, {
-      version: PEERS_FILE_VERSION,
-      peers: {},
-    });
+    const p = new PeersPersister(file, emptyFile());
     p.enqueue("slack:U1");
     p.enqueue("slack:U1");
     p.enqueue("slack:U1");
@@ -128,6 +168,7 @@ describe("PeersPersister", () => {
   it("does not overwrite an existing mapping on enqueue", () => {
     const p = new PeersPersister("/dev/null", {
       version: PEERS_FILE_VERSION,
+      defaultUnknownPolicy: "owner",
       peers: { "slack:U1": "alice" },
     });
     p.enqueue("slack:U1");
@@ -138,11 +179,7 @@ describe("PeersPersister", () => {
     const dir = await mktmp();
     const file = path.join(dir, "peers.json");
     const writeSpy = vi.spyOn(fs, "writeFile");
-    const p = new PeersPersister(
-      file,
-      { version: PEERS_FILE_VERSION, peers: {} },
-      { debounceMs: 50 },
-    );
+    const p = new PeersPersister(file, emptyFile("owner"), { debounceMs: 50 });
 
     p.enqueue("slack:U1");
     p.enqueue("slack:U2");
@@ -160,6 +197,7 @@ describe("PeersPersister", () => {
     const body = JSON.parse(await fs.readFile(file, "utf8"));
     expect(body).toEqual({
       version: 1,
+      defaultUnknownPolicy: "owner",
       peers: {
         "slack:U1": "owner",
         "slack:U2": "owner",
@@ -168,30 +206,32 @@ describe("PeersPersister", () => {
     });
   });
 
-  it("creates the peers file on first flush when missing at boot", async () => {
+  it("creates the peers file on first flush when missing at boot (fresh install → per-sender)", async () => {
     const dir = await mktmp();
     const file = path.join(dir, "nested", "peers.json");
     const loaded = loadPeersFileSync(file);
-    expect(loaded).toEqual({ version: PEERS_FILE_VERSION, peers: {} });
+    expect(loaded).toEqual({
+      version: PEERS_FILE_VERSION,
+      defaultUnknownPolicy: "per-sender",
+      peers: {},
+    });
 
     const p = new PeersPersister(file, loaded, { debounceMs: 10 });
-    p.enqueue("slack:Unew");
+    p.enqueue("slack:Unew", "slack_Unew");
     await p.flushNow();
 
     const body = JSON.parse(await fs.readFile(file, "utf8"));
     expect(body).toEqual({
       version: 1,
-      peers: { "slack:Unew": "owner" },
+      defaultUnknownPolicy: "per-sender",
+      peers: { "slack:Unew": "slack_Unew" },
     });
   });
 
   it("flushNow is a no-op when nothing is dirty", async () => {
     const dir = await mktmp();
     const file = path.join(dir, "peers.json");
-    const p = new PeersPersister(file, {
-      version: PEERS_FILE_VERSION,
-      peers: {},
-    });
+    const p = new PeersPersister(file, emptyFile());
     await p.flushNow();
     await expect(fs.access(file)).rejects.toBeTruthy();
   });
