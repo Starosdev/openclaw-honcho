@@ -4,6 +4,26 @@
 
 import type { Peer, MessageInput } from "@honcho-ai/sdk";
 
+type ContentBlock = { type?: string; text?: unknown };
+type RawMessage = { role?: string; content?: string | ContentBlock[]; timestamp?: number };
+
+/**
+ * Extract plain text from a message's `content` (string or array of content blocks).
+ * Returns "" for non-message inputs or messages with no text blocks.
+ */
+export function getRawContent(msg: unknown): string {
+  if (!msg || typeof msg !== "object") return "";
+  const { content } = msg as RawMessage;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((b): b is ContentBlock & { text: string } =>
+      !!b && b.type === "text" && typeof b.text === "string",
+    )
+    .map((b) => b.text)
+    .join("\n");
+}
+
 /**
  * Build a Honcho session key from OpenClaw context.
  * Combines sessionKey + messageProvider to create unique sessions per platform.
@@ -142,6 +162,49 @@ export function cleanMessageContent(content: string): string {
   return cleaned.trim();
 }
 
+const CONVERSATION_INFO_SENTINEL = "Conversation info (untrusted metadata):";
+
+/**
+ * Extract the sender_id from a raw message's "Conversation info (untrusted metadata):"
+ * metadata block. Must be called BEFORE cleanMessageContent() which strips these blocks.
+ * Returns undefined for DMs (no metadata block) or on parse failure.
+ *
+ * Only considers the FIRST occurrence of the sentinel to prevent user-pasted or quoted
+ * metadata blocks from poisoning sender attribution.
+ */
+export function extractSenderId(content: string): string | undefined {
+  if (!content || !content.includes(CONVERSATION_INFO_SENTINEL)) return undefined;
+
+  const lines = content.split("\n");
+  let found = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() !== CONVERSATION_INFO_SENTINEL) continue;
+    if (found) return undefined; // Ignore duplicate sentinels (likely user-pasted content)
+    found = true;
+    if (lines[i + 1]?.trim() !== "```json") continue;
+
+    // Collect JSON lines between ```json and ```
+    const jsonLines: string[] = [];
+    for (let j = i + 2; j < lines.length; j++) {
+      if (lines[j].trim() === "```") break;
+      jsonLines.push(lines[j]);
+    }
+
+    try {
+      const parsed = JSON.parse(jsonLines.join("\n"));
+      // Try sender_id first, fall back to sender
+      const id = parsed.sender_id ?? parsed.sender;
+      if (typeof id === "string" && id.length > 0) {
+        return id;
+      }
+    } catch {
+      // Malformed JSON — return undefined
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
 /**
  * Returns true if the message should be dropped entirely.
  * Patterns starting with "/" are treated as anchored regexes (e.g. "/^HEARTBEAT/i").
@@ -167,9 +230,10 @@ export function shouldSkipMessage(content: string, noisePatterns: string[]): boo
 
 export function extractMessages(
   rawMessages: unknown[],
-  ownerPeer: Peer,
+  defaultParticipantPeer: Peer,
   agentPeer: Peer,
-  noisePatterns: string[] = []
+  noisePatterns: string[] = [],
+  resolvePeer?: (senderId: string) => Peer | undefined,
 ): MessageInput[] {
   const result: MessageInput[] = [];
 
@@ -180,33 +244,25 @@ export function extractMessages(
 
     if (role !== "user" && role !== "assistant") continue;
 
-    let content = "";
-    if (typeof m.content === "string") {
-      content = m.content;
-    } else if (Array.isArray(m.content)) {
-      content = m.content
-        .filter(
-          (block: unknown) =>
-            typeof block === "object" &&
-            block !== null &&
-            (block as Record<string, unknown>).type === "text"
-        )
-        .map((block: unknown) => (block as Record<string, unknown>).text)
-        .filter((t): t is string => typeof t === "string")
-        .join("\n");
+    const rawContent = getRawContent(msg);
+
+    // For user messages, extract sender ID before cleaning strips metadata
+    let peer: Peer;
+    if (role === "user") {
+      const senderId = extractSenderId(rawContent);
+      peer = (senderId && resolvePeer?.(senderId)) || defaultParticipantPeer;
+    } else {
+      peer = agentPeer;
     }
 
-    content = cleanMessageContent(content);
+    let content = cleanMessageContent(rawContent);
     content = content.trim();
 
     if (!content) continue;
     if (shouldSkipMessage(content, noisePatterns)) continue;
 
-    if (content) {
-      const peer = role === "user" ? ownerPeer : agentPeer;
-      const ts = typeof m.timestamp === "number" ? new Date(m.timestamp) : undefined;
-      result.push(peer.message(content, ts ? { createdAt: ts } : undefined));
-    }
+    const ts = typeof m.timestamp === "number" ? new Date(m.timestamp) : undefined;
+    result.push(peer.message(content, ts ? { createdAt: ts } : undefined));
   }
 
   return result;

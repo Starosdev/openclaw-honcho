@@ -451,11 +451,13 @@ export function registerCli(api: OpenClawPluginApi, state: PluginState): void {
         .command("ask <question>")
         .description("Ask Honcho about the user")
         .option("-a, --agent <id>", "Agent ID to query as (default: primary agent)")
-        .action(async (question: string, options: { agent?: string }) => {
+        .option("-p, --peer <id>", "Channel peer ID or Honcho peer ID to target (default: owner)")
+        .action(async (question: string, options: { agent?: string; peer?: string }) => {
           try {
             await state.ensureInitialized();
             const agentPeer = await state.getAgentPeer(options.agent ?? state.resolveDefaultAgentId());
-            const answer = await agentPeer.chat(question, { target: state.ownerPeer! });
+            const participantPeer = await state.getParticipantPeer(options.peer);
+            const answer = await agentPeer.chat(question, { target: participantPeer });
             console.log(answer ?? "No information available.");
           } catch (error) {
             console.error(`Failed to query: ${error}`);
@@ -467,10 +469,12 @@ export function registerCli(api: OpenClawPluginApi, state: PluginState): void {
         .description("Semantic search over Honcho memory")
         .option("-k, --top-k <number>", "Number of results to return", "10")
         .option("-d, --max-distance <number>", "Maximum semantic distance (0-1)", "0.5")
-        .action(async (query: string, options: { topK: string; maxDistance: string }) => {
+        .option("-p, --peer <id>", "Channel peer ID or Honcho peer ID to target (default: owner)")
+        .action(async (query: string, options: { topK: string; maxDistance: string; peer?: string }) => {
           try {
             await state.ensureInitialized();
-            const representation = await state.ownerPeer!.representation({
+            const participantPeer = await state.getParticipantPeer(options.peer);
+            const representation = await participantPeer.representation({
               searchQuery: query,
               searchTopK: parseInt(options.topK, 10),
               searchMaxDistance: parseFloat(options.maxDistance),

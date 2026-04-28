@@ -7,7 +7,12 @@ export function registerGatewayHook(api: OpenClawPluginApi, state: PluginState):
     api.logger.info("Initializing Honcho memory...");
     try {
       await state.ensureInitialized();
-      api.logger.info("Honcho memory ready");
+      const { filePath, peers } = state.peersPersister;
+      api.logger.info(
+        `Honcho memory ready — peer map: ${filePath} (${Object.keys(peers).length} known sender${
+          Object.keys(peers).length === 1 ? "" : "s"
+        })`,
+      );
     } catch (error) {
       api.logger.error(`Failed to initialize Honcho: ${error}`);
     }

@@ -6,6 +6,8 @@ import {
   buildSessionKey,
   isSubagentSession,
   extractMessages,
+  extractSenderId,
+  getRawContent,
 } from "../helpers.js";
 import { subagentParentMap } from "./subagent.js";
 
@@ -55,30 +57,90 @@ async function flushMessages(
   const lastSavedIndex = Math.min(Math.max(rawLastSavedIndex, 0), messages.length);
   const startIndex = Math.max(turnStartIndex, lastSavedIndex);
 
-  const peerConfigs: Array<[string, { observeMe: boolean; observeOthers: boolean }]> = [
-    [OWNER_ID, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers }],
-    [agentPeer.id, { observeMe: true, observeOthers: true }],
-  ];
-  if (parentPeer) {
-    peerConfigs.push([parentPeer.id, { observeMe: false, observeOthers: true }]);
-  }
-
-  await session.addPeers(peerConfigs);
-
   if (messages.length <= startIndex) {
     return 0;
   }
 
   const newRawMessages = messages.slice(startIndex);
-  const extracted = extractMessages(newRawMessages, state.ownerPeer!, agentPeer, state.cfg.noisePatterns);
+
+  // Pre-resolve participant peers for all unique sender IDs in this batch
+  const senderIds = new Set<string>();
+  let lastSenderId: string | undefined;
+  let userMsgCount = 0;
+  for (const msg of newRawMessages) {
+    if (!msg || typeof msg !== "object") continue;
+    const m = msg as Record<string, unknown>;
+    if (m.role !== "user") continue;
+    userMsgCount++;
+    const rawContent = getRawContent(msg);
+    const senderId = extractSenderId(rawContent);
+    if (senderId) {
+      senderIds.add(senderId);
+      lastSenderId = senderId;
+    } else {
+      const hasConvInfo = rawContent.includes("Conversation info (untrusted metadata):");
+      api.logger.debug?.(`[honcho] User message without sender_id (hasConvInfo=${hasConvInfo}, contentLen=${rawContent.length})`);
+    }
+  }
+  if (senderIds.size > 0) {
+    api.logger.debug?.(`[honcho] Resolved ${senderIds.size} unique sender(s) from ${userMsgCount} user message(s)`);
+  }
+
+  // Parallel peer resolution — avoids sequential await bottleneck in group chats.
+  const resolvedPeers = new Map<string, Awaited<ReturnType<typeof state.getParticipantPeer>>>();
+  const senderIdArray = [...senderIds];
+  const peers = await Promise.all(senderIdArray.map((id) => state.getParticipantPeer(id)));
+  for (let i = 0; i < senderIdArray.length; i++) {
+    resolvedPeers.set(senderIdArray[i], peers[i]);
+  }
+
+  const defaultParticipantPeer = await state.getParticipantPeer();
+
+  // Build peer configs: default owner + all resolved participant peers + agent + parent
+  const peerConfigMap = new Map<string, { observeMe: boolean; observeOthers: boolean }>();
+  peerConfigMap.set(OWNER_ID, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
+  for (const [, peer] of resolvedPeers) {
+    if (peer.id !== OWNER_ID) {
+      peerConfigMap.set(peer.id, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
+    }
+  }
+  peerConfigMap.set(agentPeer.id, { observeMe: true, observeOthers: true });
+  if (parentPeer) {
+    peerConfigMap.set(parentPeer.id, { observeMe: false, observeOthers: true });
+  }
+
+  const peerConfigs = Array.from(peerConfigMap.entries()) as Array<
+    [string, { observeMe: boolean; observeOthers: boolean }]
+  >;
+  await session.addPeers(peerConfigs);
+
+  const extracted = extractMessages(
+    newRawMessages,
+    defaultParticipantPeer,
+    agentPeer,
+    state.cfg.noisePatterns,
+    (senderId) => resolvedPeers.get(senderId),
+  );
+
+  // participantSenderId = last active sender, used by tools to resolve the
+  // session's current participant peer. Named "sender" (not "peer") to
+  // distinguish raw channel IDs from resolved Honcho peer IDs.
+  const updatedMeta: Record<string, unknown> = {
+    ...existingMeta,
+    ...sessionMeta,
+    lastSavedIndex: messages.length,
+  };
+  if (lastSenderId) {
+    updatedMeta.participantSenderId = lastSenderId;
+  }
 
   if (extracted.length === 0) {
-    await session.setMetadata({ ...existingMeta, ...sessionMeta, lastSavedIndex: messages.length });
+    await session.setMetadata(updatedMeta);
     return 0;
   }
 
   await session.addMessages(extracted);
-  await session.setMetadata({ ...existingMeta, ...sessionMeta, lastSavedIndex: messages.length });
+  await session.setMetadata(updatedMeta);
   return extracted.length;
 }
 

@@ -36,6 +36,11 @@
         "type": "boolean",
         "default": false,
         "description": "When true, built-in noise patterns are not applied — only noisePatterns entries are used."
+      },
+      "crossSessionSearch": {
+        "type": "boolean",
+        "default": true,
+        "description": "When true (default), memory_search/memory_get can return results from any session in the workspace. When false, results are scoped to the active session and its child sessions only."
       }
     }
   },
@@ -76,6 +81,11 @@
       "label": "Disable Default Noise Patterns",
       "advanced": true,
       "help": "When enabled, only custom noisePatterns entries are used — built-in defaults are skipped."
+    },
+    "crossSessionSearch": {
+      "label": "Cross-Session Search",
+      "advanced": true,
+      "help": "When enabled (default), memory tools can return results from any session in the workspace. Disable to scope results to the active session only."
     }
   }
 }

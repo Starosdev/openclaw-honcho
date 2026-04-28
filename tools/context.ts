@@ -2,10 +2,11 @@ import { Type } from "@sinclair/typebox";
 // @ts-ignore - resolved by openclaw runtime
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { PluginState } from "../state.js";
+import { buildSessionKey } from "../helpers.js";
 
 export function registerContextTool(api: OpenClawPluginApi, state: PluginState): void {
   api.registerTool(
-    {
+    (toolCtx) => ({
       name: "honcho_context",
       label: "Get User Context",
       description:
@@ -19,16 +20,25 @@ export function registerContextTool(api: OpenClawPluginApi, state: PluginState):
               description: "Detail level: 'card' for key facts (default, fast), 'full' for broad representation.",
             })
           ),
+          about: Type.Optional(
+            Type.String({
+              description:
+                "Sender ID of the user to query about. Defaults to the last active sender. Pass a specific sender_id to get context about a different participant.",
+            })
+          ),
         },
         { additionalProperties: false }
       ),
       async execute(_toolCallId, params) {
-        const { detail = "card" } = params as { detail?: "card" | "full" };
+        const { detail = "card", about } = params as { detail?: "card" | "full"; about?: string };
 
         await state.ensureInitialized();
+        const participantPeer = about
+          ? await state.getParticipantPeer(about)
+          : await state.resolveSessionParticipantPeer(buildSessionKey(toolCtx));
 
         if (detail === "card") {
-          const card = await state.ownerPeer!.card().catch((err) => {
+          const card = await participantPeer.card().catch((err) => {
             // Only treat NotFoundError as empty; re-throw others or log
             if (err?.name === "NotFoundError") return null;
             // Optionally log unexpected errors for debugging
@@ -60,7 +70,7 @@ export function registerContextTool(api: OpenClawPluginApi, state: PluginState):
         }
 
         // detail === "full"
-        const representation = await state.ownerPeer!.representation({
+        const representation = await participantPeer.representation({
           includeMostFrequent: true,
         });
 
@@ -81,7 +91,7 @@ export function registerContextTool(api: OpenClawPluginApi, state: PluginState):
           details: { detail, representationLength: representation.length },
         };
       },
-    },
+    }),
     { name: "honcho_context" }
   );
 }
