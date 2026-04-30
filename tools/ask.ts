@@ -39,6 +39,9 @@ export function registerAskTool(api: OpenClawPluginApi, state: PluginState): voi
           about?: string;
         };
 
+        const t0 = Date.now();
+        api.logger.debug?.(`[honcho] honcho_ask: query=${JSON.stringify(query)} depth=${depth} about=${about ?? "default"}`);
+
         await state.ensureInitialized();
         const agentPeer = await state.getAgentPeer(toolCtx.agentId);
         const participantPeer = about
@@ -46,10 +49,13 @@ export function registerAskTool(api: OpenClawPluginApi, state: PluginState): voi
           : await state.resolveSessionParticipantPeer(buildSessionKey(toolCtx));
 
         const reasoningLevel = depth === "thorough" ? "high" : "low";
+        api.logger.debug?.(`[honcho] honcho_ask: calling agentPeer.chat() reasoningLevel=${reasoningLevel} agentPeer=${agentPeer.id} target=${participantPeer.id}`);
+        const tChat = Date.now();
         const answer = await agentPeer.chat(query, {
           target: participantPeer,
           reasoningLevel,
         });
+        api.logger.debug?.(`[honcho] honcho_ask: agentPeer.chat() completed in ${Date.now() - tChat}ms (total ${Date.now() - t0}ms)`);
 
         return {
           content: [{ type: "text", text: answer! }],

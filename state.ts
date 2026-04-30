@@ -131,8 +131,11 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
   }
 
   async function doInit(): Promise<void> {
+    const t0 = Date.now();
+    api.logger.debug?.(`[honcho] doInit: starting workspace initialization`);
 
     const wsMeta = await honcho.getMetadata();
+    api.logger.debug?.(`[honcho] doInit: getMetadata() completed in ${Date.now() - t0}ms`);
     state.agentPeerMap = (wsMeta.agentPeerMap as Record<string, string>) ?? {};
 
     const defaultId = resolveDefaultAgentId();
@@ -149,6 +152,7 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
     state.participantPeers.set(OWNER_ID, defaultPeer);
 
     state.initialized = true;
+    api.logger.debug?.(`[honcho] doInit: completed in ${Date.now() - t0}ms`);
   }
 
   async function ensureOwnerPeer(): Promise<Peer> {
@@ -184,8 +188,10 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
   }
 
   async function resolveSessionParticipantPeer(sessionKey: string): Promise<Peer> {
+    const tResolve = Date.now();
     const session = await honcho.session(sessionKey);
     const meta = await session.getMetadata();
+    api.logger.debug?.(`[honcho] resolveSessionParticipantPeer: session+meta for ${sessionKey} in ${Date.now() - tResolve}ms`);
     if (meta && typeof meta === "object") {
       const senderId = (meta as Record<string, unknown>).participantSenderId;
       if (typeof senderId === "string" && senderId.length > 0) {

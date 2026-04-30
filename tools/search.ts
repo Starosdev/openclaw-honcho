@@ -47,16 +47,22 @@ export function registerSearchTool(api: OpenClawPluginApi, state: PluginState): 
           about?: string;
         };
 
+        const t0 = Date.now();
+        api.logger.debug?.(`[honcho] honcho_search_conclusions: query=${JSON.stringify(query)} topK=${topK ?? 10} maxDistance=${maxDistance ?? 0.5} about=${about ?? "default"}`);
+
         await state.ensureInitialized();
         const participantPeer = about
           ? await state.getParticipantPeer(about)
           : await state.resolveSessionParticipantPeer(buildSessionKey(toolCtx));
 
+        api.logger.debug?.(`[honcho] honcho_search_conclusions: calling participantPeer.representation(search) peer=${participantPeer.id}`);
+        const tRepr = Date.now();
         const representation = await participantPeer.representation({
           searchQuery: query,
           searchTopK: topK ?? 10,
           searchMaxDistance: maxDistance ?? 0.5,
         });
+        api.logger.debug?.(`[honcho] honcho_search_conclusions: representation() completed in ${Date.now() - tRepr}ms (total ${Date.now() - t0}ms)`);
 
         if (!representation) {
           return {

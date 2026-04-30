@@ -76,6 +76,9 @@ export function registerMessageSearchTool(api: OpenClawPluginApi, state: PluginS
           limit?: number;
         };
 
+        const t0 = Date.now();
+        api.logger.debug?.(`[honcho] honcho_search_messages: query=${JSON.stringify(query)} from=${from} about=${about ?? "default"} limit=${limit ?? 10}`);
+
         await state.ensureInitialized();
 
         // Build filters from remaining parameters (metadata, date range)
@@ -98,17 +101,22 @@ export function registerMessageSearchTool(api: OpenClawPluginApi, state: PluginS
 
         // Route to the appropriate search method based on `from`
         let messages: Message[];
+        const tSearch = Date.now();
         if (from === "user") {
           const participantPeer = about
             ? await state.getParticipantPeer(about)
             : await state.resolveSessionParticipantPeer(buildSessionKey(toolCtx));
+          api.logger.debug?.(`[honcho] honcho_search_messages: calling participantPeer.search() peer=${participantPeer.id}`);
           messages = await participantPeer.search(query, searchOpts);
         } else if (from === "agent") {
           const agentPeer = await state.getAgentPeer(toolCtx.agentId);
+          api.logger.debug?.(`[honcho] honcho_search_messages: calling agentPeer.search() peer=${agentPeer.id}`);
           messages = await agentPeer.search(query, searchOpts);
         } else {
+          api.logger.debug?.(`[honcho] honcho_search_messages: calling honcho.search()`);
           messages = await state.honcho.search(query, searchOpts);
         }
+        api.logger.debug?.(`[honcho] honcho_search_messages: search completed in ${Date.now() - tSearch}ms (total ${Date.now() - t0}ms) results=${messages.length}`);
 
         if (!messages.length) {
           return {

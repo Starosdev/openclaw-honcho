@@ -32,13 +32,21 @@ export function registerContextTool(api: OpenClawPluginApi, state: PluginState):
       async execute(_toolCallId, params) {
         const { detail = "card", about } = params as { detail?: "card" | "full"; about?: string };
 
+        const t0 = Date.now();
+        api.logger.debug?.(`[honcho] honcho_context: detail=${detail} about=${about ?? "default"}`);
+
         await state.ensureInitialized();
         const participantPeer = about
           ? await state.getParticipantPeer(about)
           : await state.resolveSessionParticipantPeer(buildSessionKey(toolCtx));
 
         if (detail === "card") {
-          const card = await participantPeer.card().catch((err) => {
+          api.logger.debug?.(`[honcho] honcho_context: calling participantPeer.card() peer=${participantPeer.id}`);
+          const tCard = Date.now();
+          const card = await participantPeer.card().then((r) => {
+            api.logger.debug?.(`[honcho] honcho_context: card() completed in ${Date.now() - tCard}ms (total ${Date.now() - t0}ms)`);
+            return r;
+          }).catch((err) => {
             // Only treat NotFoundError as empty; re-throw others or log
             if (err?.name === "NotFoundError") return null;
             // Optionally log unexpected errors for debugging
@@ -70,9 +78,12 @@ export function registerContextTool(api: OpenClawPluginApi, state: PluginState):
         }
 
         // detail === "full"
+        api.logger.debug?.(`[honcho] honcho_context: calling participantPeer.representation(full) peer=${participantPeer.id}`);
+        const tRepr = Date.now();
         const representation = await participantPeer.representation({
           includeMostFrequent: true,
         });
+        api.logger.debug?.(`[honcho] honcho_context: representation() completed in ${Date.now() - tRepr}ms (total ${Date.now() - t0}ms)`);
 
         if (!representation) {
           return {

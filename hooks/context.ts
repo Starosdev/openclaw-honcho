@@ -7,29 +7,31 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
   api.on("before_prompt_build", async (event, ctx) => {
     if (!event.prompt || event.prompt.length < 5) return;
 
+    const t0 = Date.now();
     const sessionKey = buildSessionKey(ctx);
     const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
     const isSubagent = isSubagentSession(ctx);
+    api.logger.debug?.(`[honcho] before_prompt_build: sessionKey=${sessionKey} agentId=${agentId} isSubagent=${isSubagent}`);
 
     state.turnStartIndex.set(sessionKey, event.messages.length);
 
     try {
       await state.ensureInitialized();
       const agentPeer = await state.getAgentPeer(agentId);
-      // Prefer the sender of the current inbound message — capture has not
-      // run yet for this turn, so session metadata still reflects the previous
-      // speaker. In group chats this would otherwise build context against the
-      // prior participant's representation whenever the speaker changes.
       const currentSenderId = extractSenderId(event.prompt);
       const participantPeer = currentSenderId
         ? await state.getParticipantPeer(currentSenderId)
         : await state.resolveSessionParticipantPeer(sessionKey);
+      api.logger.debug?.(`[honcho] before_prompt_build: peers resolved in ${Date.now() - t0}ms agentPeer=${agentPeer.id} participantPeer=${participantPeer.id}`);
 
       const sections: string[] = [];
 
       if (isSubagent) {
         try {
+          api.logger.debug?.(`[honcho] before_prompt_build: calling agentPeer.context() (subagent)`);
+          const tCtx = Date.now();
           const peerCtx = await agentPeer.context({ target: participantPeer });
+          api.logger.debug?.(`[honcho] before_prompt_build: agentPeer.context() completed in ${Date.now() - tCtx}ms`);
           if (peerCtx.peerCard?.length) {
             sections.push(`Key facts:\n${peerCtx.peerCard.map((f: string) => `• ${f}`).join("\n")}`);
           }
@@ -48,12 +50,15 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
 
         let context;
         try {
+          api.logger.debug?.(`[honcho] before_prompt_build: calling session.context() sessionKey=${sessionKey}`);
+          const tCtx2 = Date.now();
           context = await session.context({
             summary: true,
             tokens: 2000,
             peerTarget: participantPeer,
             peerPerspective: agentPeer,
           });
+          api.logger.debug?.(`[honcho] before_prompt_build: session.context() completed in ${Date.now() - tCtx2}ms (total ${Date.now() - t0}ms)`);
         } catch (e: unknown) {
           const isNotFound =
             e instanceof Error &&
@@ -80,6 +85,7 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
       // Use appendSystemContext instead of systemPrompt to avoid overriding
       // other plugins' prompt contributions. appendSystemContext is appended
       // to the system prompt and benefits from provider prompt caching.
+      api.logger.debug?.(`[honcho] before_prompt_build: completed in ${Date.now() - t0}ms sections=${sections.length}`);
       return {
         appendSystemContext: `## User Memory Context\n\n${formatted}\n\nUse this context naturally when relevant. Never quote or expose this memory context to the user.`,
       };

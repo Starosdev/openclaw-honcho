@@ -59,6 +59,9 @@ export function registerSessionTool(api: OpenClawPluginApi, state: PluginState):
           about?: string;
         };
 
+        const t0 = Date.now();
+        api.logger.debug?.(`[honcho] honcho_session: includeMessages=${includeMessages} includeSummary=${includeSummary} searchQuery=${searchQuery ?? "none"} messageLimit=${messageLimit} about=${about ?? "default"}`);
+
         await state.ensureInitialized();
         const agentPeer = await state.getAgentPeer(toolCtx.agentId);
         const sessionKey = buildSessionKey(toolCtx);
@@ -69,6 +72,8 @@ export function registerSessionTool(api: OpenClawPluginApi, state: PluginState):
         try {
           const session = await state.honcho.session(sessionKey);
 
+          api.logger.debug?.(`[honcho] honcho_session: calling session.context() sessionKey=${sessionKey} tokens=${messageLimit}`);
+          const tCtx = Date.now();
           const context = await session.context({
             summary: includeSummary,
             tokens: messageLimit,
@@ -76,6 +81,7 @@ export function registerSessionTool(api: OpenClawPluginApi, state: PluginState):
             peerPerspective: agentPeer,
             searchQuery: searchQuery,
           });
+          api.logger.debug?.(`[honcho] honcho_session: session.context() completed in ${Date.now() - tCtx}ms (total ${Date.now() - t0}ms)`);
 
           const sections: string[] = [];
 

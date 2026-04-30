@@ -23,9 +23,11 @@ async function flushMessages(
 ): Promise<number> {
   if (!messages?.length) return 0;
 
+  const t0 = Date.now();
   const sessionKey = buildSessionKey(ctx);
   const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
   const isSubagent = isSubagentSession(ctx);
+  api.logger.debug?.(`[honcho] flushMessages: sessionKey=${sessionKey} agentId=${agentId} messageCount=${messages.length}`);
   const parentAgentId = isSubagent ? subagentParentMap.get(ctx.sessionKey ?? "") : undefined;
 
   await state.ensureInitialized();
@@ -139,8 +141,11 @@ async function flushMessages(
     return 0;
   }
 
+  const tAdd = Date.now();
   await session.addMessages(extracted);
+  api.logger.debug?.(`[honcho] flushMessages: addMessages(${extracted.length}) completed in ${Date.now() - tAdd}ms`);
   await session.setMetadata(updatedMeta);
+  api.logger.debug?.(`[honcho] flushMessages: completed in ${Date.now() - t0}ms saved=${extracted.length}`);
   return extracted.length;
 }
 
