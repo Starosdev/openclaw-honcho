@@ -2,6 +2,16 @@
 
 All notable changes to `@honcho-ai/openclaw-honcho` will be documented in this file.
 
+## [Fork note] - 2026-06-12
+
+### Downstream
+- **Staros compatibility backport recorded in fork history**: `Starosdev/openclaw-honcho`
+  merged the old-compatible backport history via merge commit `3d559a3`, preserving
+  backport commit `1080c2cf6ad18e940c243f72e023f9e46cd80626` (`1.1.1-staros.1`).
+  This exists for Staros deployments still pinned to `openclaw@2026.2.13`, where
+  upstream `v1.2.0+` cannot load yet. Live Staros should continue pinning the exact
+  backport commit, not the fork head.
+
 ## [1.5.1] - 2026-05-21
 
 ### Fixed
