@@ -2,7 +2,11 @@
  * Pure helper functions — no mutable state dependencies.
  */
 
+import { createHash } from "node:crypto";
 import type { Peer, MessageInput } from "@honcho-ai/sdk";
+
+const HONCHO_SESSION_ID_MAX = 100;
+const HONCHO_SESSION_HASH_LEN = 12;
 
 /**
  * Build a Honcho session key from OpenClaw context.
@@ -13,7 +17,13 @@ export function buildSessionKey(ctx?: { sessionKey?: string; messageProvider?: s
   const baseKey = ctx?.sessionKey ?? "default";
   const provider = ctx?.messageProvider ?? "unknown";
   const combined = `${baseKey}-${provider}`;
-  return combined.replace(/[^a-zA-Z0-9-]/g, "-");
+  const sanitized = combined.replace(/[^a-zA-Z0-9-]/g, "-");
+  if (sanitized.length <= HONCHO_SESSION_ID_MAX) return sanitized;
+
+  const hash = createHash("sha256").update(combined).digest("hex").slice(0, HONCHO_SESSION_HASH_LEN);
+  const prefixMax = HONCHO_SESSION_ID_MAX - HONCHO_SESSION_HASH_LEN - 1;
+  const prefix = sanitized.slice(0, Math.max(prefixMax, 1)).replace(/-+$/g, "");
+  return `${prefix}-${hash}`;
 }
 
 export function isSubagentSession(ctx?: { sessionKey?: string }): boolean {
