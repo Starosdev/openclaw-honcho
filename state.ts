@@ -18,15 +18,17 @@ import {
 export const OWNER_ID = "owner";
 export const LEGACY_PEER_ID = "openclaw";
 
-export function isLocalHonchoBaseUrl(baseUrl?: string): boolean {
-  const base = String(baseUrl ?? "").trim();
-  if (!base) return false;
+export const HONCHO_CLOUD_HOSTNAME = "api.honcho.dev";
 
+/**
+ * True when the base URL points at the managed Honcho cloud
+ * (api.honcho.dev). The cloud is the only deployment that requires an API
+ * key; any other base URL — localhost or a custom self-hosted domain — is
+ * treated as self-hosted.
+ */
+export function isManagedHonchoCloud(baseUrl: string): boolean {
   try {
-    const { hostname, protocol } = new URL(base);
-    if (protocol !== "http:" && protocol !== "https:") return false;
-    const normalizedHost = hostname.replace(/^\[(.*)\]$/, "$1");
-    return normalizedHost === "localhost" || normalizedHost === "127.0.0.1" || normalizedHost === "::1";
+    return new URL(baseUrl).hostname.toLowerCase() === HONCHO_CLOUD_HOSTNAME;
   } catch {
     return false;
   }
@@ -66,7 +68,7 @@ export type PluginState = {
 export function createPluginState(api: OpenClawPluginApi): PluginState {
   const cfg = honchoConfigSchema.parse(api.pluginConfig);
 
-  const selfHosted = isLocalHonchoBaseUrl(cfg.baseUrl);
+  const selfHosted = !isManagedHonchoCloud(cfg.baseUrl);
 
   if (!cfg.apiKey && !selfHosted) {
     api.logger.warn(
