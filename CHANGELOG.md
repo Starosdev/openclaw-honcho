@@ -2,6 +2,18 @@
 
 All notable changes to `@honcho-ai/openclaw-honcho` will be documented in this file.
 
+## [1.5.3] - 2026-07-30
+
+### Fixed
+- **OpenClaw plugin API compatibility (#118)**: register the prompt builder and memory runtime through the unified `registerMemoryCapability` API, and derive subagent parent IDs directly from the trusted requester session key instead of the removed `before_agent_start` hook. The minimum supported OpenClaw version is now `2026.4.7`.
+- **Memory-slot search scoping**: the memory runtime now passes the session key per call via `search({ sessionKey })` and matches the current `MemoryPluginRuntime` shape (async `getMemorySearchManager({ agentId })`), so `crossSessionSearch: false` scopes correctly through the memory slot instead of always spanning sessions.
+
+## [1.5.2] - 2026-07-17
+
+### Fixed
+- **`crossSessionSearch` flag now actually toggles search strategy (#113)**: `memory_search` was always session-scoped regardless of the flag, so cross-session queries returned `[]`. Config default (`true`) now spans the participant peer's sessions; `false` scopes to the active session. Adds optional `crossSessionSearch` parameter on `memory_search` for per-call override.
+- **`flushMessages` reliability (#108)**: chunk `addMessages` under Honcho's 100/request limit and stop clobbering `lastSavedIndex`, preventing lost or duplicated messages on large or repeated flushes.
+- **No spurious API-key warning for self-hosted deployments (#109)**: only `api.honcho.dev` is treated as the managed cloud, so self-hosted instances on a custom domain no longer log a missing-API-key warning on startup and now correctly report `provider: "honcho-selfhosted"`.
 ## [Fork note] - 2026-06-12
 
 ### Downstream

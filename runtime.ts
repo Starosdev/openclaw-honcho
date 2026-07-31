@@ -1,8 +1,17 @@
-import { buildSessionKey } from "./helpers.js";
-import { isLocalHonchoBaseUrl, type PluginState } from "./state.js";
+// @ts-ignore - resolved by openclaw runtime
+import type { MemoryPluginCapability } from "openclaw/plugin-sdk/core";
+import { isManagedHonchoCloud, type PluginState } from "./state.js";
 
 const DEFAULT_SEARCH_RESULTS = 10;
 const MAX_SEARCH_RESULTS = 50;
+const SESSION_TRANSCRIPT_CACHE_TTL_MS = 5_000;
+
+type TranscriptCacheEntry = {
+  expiresAt: number;
+  promise: Promise<string>;
+};
+
+const transcriptCaches = new WeakMap<PluginState, Map<string, TranscriptCacheEntry>>();
 
 /** Convert a Honcho session id into the generic memory tool path shape. */
 function normalizeSessionPath(sessionId: string): string {
@@ -31,7 +40,7 @@ function sliceLines(text: string, from = 1, lines?: number): string {
 }
 
 /** Reconstruct a readable session transcript from Honcho session context data. */
-async function buildSessionTranscript(
+async function fetchSessionTranscript(
   state: PluginState,
   agentId: string,
   sessionId: string
@@ -40,7 +49,7 @@ async function buildSessionTranscript(
 
   const participantPeer = await state.resolveSessionParticipantPeer(sessionId);
   const agentPeer = await state.getAgentPeer(agentId);
-  const session = await state.honcho.session(sessionId, { metadata: { agentId } });
+  const session = await state.honcho.session(sessionId);
   const context = await session.context({
     summary: true,
     tokens: 20000,
@@ -68,6 +77,27 @@ async function buildSessionTranscript(
   }
 
   return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function buildSessionTranscript(
+  state: PluginState,
+  agentId: string,
+  sessionId: string,
+): Promise<string> {
+  const cache = transcriptCaches.get(state) ?? new Map<string, TranscriptCacheEntry>();
+  transcriptCaches.set(state, cache);
+  const cacheKey = `${agentId}\0${sessionId}`;
+  const now = Date.now();
+  const cached = cache.get(cacheKey);
+  if (cached && cached.expiresAt > now) return cached.promise;
+
+  const promise = fetchSessionTranscript(state, agentId, sessionId);
+  cache.set(cacheKey, { expiresAt: now + SESSION_TRANSCRIPT_CACHE_TTL_MS, promise });
+  promise.catch(() => {
+    const current = cache.get(cacheKey);
+    if (current?.promise === promise) cache.delete(cacheKey);
+  });
+  return promise;
 }
 
 /** Best-effort map a matched snippet back to transcript line numbers for memory_search. */
@@ -125,58 +155,40 @@ export async function getHonchoMemorySearchManager(
 
   return {
     manager: {
-      async search(query: string, opts: { maxResults?: number; sessionKey?: string } = {}) {
+      async search(query: string, opts: { maxResults?: number; crossSessionSearch?: boolean; sessionKey?: string } = {}) {
         await state.ensureInitialized();
-        const participantPeer = activeSessionKey
-          ? await state.resolveSessionParticipantPeer(activeSessionKey)
+        // The active-memory contract scopes per call (search opts.sessionKey);
+        // fall back to the key captured at manager creation for the legacy /
+        // passthrough-tool path.
+        const sessionKey = opts.sessionKey ?? activeSessionKey;
+        const participantPeer = sessionKey
+          ? await state.resolveSessionParticipantPeer(sessionKey)
           : await state.getParticipantPeer();
         const requested = Number.isFinite(opts.maxResults)
           ? Number(opts.maxResults)
           : DEFAULT_SEARCH_RESULTS;
         const limit = Math.min(MAX_SEARCH_RESULTS, Math.max(1, Math.trunc(requested)));
-        const requestedSessionKey =
-          typeof opts.sessionKey === "string" && opts.sessionKey.length > 0
-            ? opts.sessionKey
-            : activeSessionKey ?? null;
-        const scopeEnabled = !state.cfg.crossSessionSearch;
-        if (
-          scopeEnabled &&
-          activeSessionKey &&
-          requestedSessionKey &&
-          !matchesSessionScope(requestedSessionKey, activeSessionKey)
-        ) {
-          throw new Error(
-            `Requested Honcho session is outside the active session: ${requestedSessionKey}`
-          );
-        }
-        const transcriptCache = new Map<string, Promise<string>>();
-        const seenSessionIds = new Set<string>();
+
+        const crossSession = opts.crossSessionSearch ?? state.cfg.crossSessionSearch;
+        const rawResults: Array<any> = crossSession || !sessionKey
+          ? await participantPeer.search(query, { limit })
+          : await (
+              await state.honcho.session(sessionKey)
+            ).search(query, { limit });
+
+        const seen = new Set<string>();
         const filtered: Array<any> = [];
-
-        const collect = (messages: Array<any>) => {
-          for (const msg of messages) {
-            if (filtered.length >= limit) break;
-            const sessionId = typeof msg?.sessionId === "string" ? msg.sessionId : "";
-            if (!sessionId || seenSessionIds.has(`${sessionId}:${String(msg?.id ?? msg?.createdAt ?? msg?.content ?? "")}`)) {
-              continue;
-            }
-            if (scopeEnabled && requestedSessionKey && !matchesSessionScope(sessionId, requestedSessionKey)) {
-              continue;
-            }
-            seenSessionIds.add(`${sessionId}:${String(msg?.id ?? msg?.createdAt ?? msg?.content ?? "")}`);
-            filtered.push(msg);
-          }
-        };
-
-        if (requestedSessionKey) {
-          const exactSession = await state.honcho.session(requestedSessionKey, {
-            metadata: { agentId },
-          });
-          collect(await exactSession.search(query, { limit }));
-        } else {
-          collect(await participantPeer.search(query, { limit }));
+        for (const msg of rawResults) {
+          if (filtered.length >= limit) break;
+          const sessionId = typeof msg?.sessionId === "string" ? msg.sessionId : "";
+          if (!sessionId) continue;
+          const dedupeKey = `${sessionId}:${String(msg?.id ?? msg?.createdAt ?? msg?.content ?? "")}`;
+          if (seen.has(dedupeKey)) continue;
+          seen.add(dedupeKey);
+          filtered.push(msg);
         }
 
+        const transcriptCache = new Map<string, Promise<string>>();
         return Promise.all(
           filtered.map(async (msg: any) => {
             const snippet = typeof msg.content === "string" ? msg.content : "";
@@ -193,7 +205,7 @@ export async function getHonchoMemorySearchManager(
               endLine,
               score: 1,
               snippet,
-              source: "sessions",
+              source: "sessions" as const,
             };
           })
         );
@@ -217,10 +229,10 @@ export async function getHonchoMemorySearchManager(
 
       status() {
         return {
-          backend: "qmd",
-          provider: isLocalHonchoBaseUrl(state.cfg.baseUrl) ? "honcho-selfhosted" : "honcho",
+          backend: "qmd" as const,
+          provider: isManagedHonchoCloud(state.cfg.baseUrl) ? "honcho" : "honcho-selfhosted",
           model: "n/a",
-          sources: ["sessions"],
+          sources: ["sessions" as const],
           custom: {
             searchMode: "semantic",
             workspaceId: state.cfg.workspaceId,
@@ -242,29 +254,31 @@ export async function getHonchoMemorySearchManager(
 
 /** Resolve the memory backend descriptor expected by the OpenClaw memory slot. */
 export function resolveHonchoMemoryBackendConfig(
-  params: { sessionKey?: string; agentId?: string } = {}
+  _params: { agentId?: string } = {},
 ) {
-  const sessionKey = buildSessionKey(params);
   return {
-    backend: "qmd",
+    backend: "qmd" as const,
     qmd: {},
-    sessionKey,
   };
 }
 
-/** Register the Honcho runtime adapter when the host exposes memory runtime registration. */
-export function registerHonchoMemoryRuntime(api: any, state: PluginState): void {
-  if (typeof api?.registerMemoryRuntime !== "function") {
-    return;
-  }
-
-  api.registerMemoryRuntime({
-    getMemorySearchManager(params: { agentId?: string; sessionKey?: string }) {
-      return getHonchoMemorySearchManager(state, params);
+/** Build the Honcho adapter for OpenClaw's active memory capability.
+ *
+ * The current host contract creates a session-agnostic manager here and passes
+ * the active session key per call via `search(query, { sessionKey })`, so this
+ * adapter does not forward a session key at creation time. Session-scoped reads
+ * still flow through the memory_search / memory_get passthrough tools, which
+ * resolve the session key from their tool context. */
+export function createHonchoMemoryRuntime(
+  state: PluginState,
+): NonNullable<MemoryPluginCapability["runtime"]> {
+  return {
+    async getMemorySearchManager(params: { agentId?: string }) {
+      return getHonchoMemorySearchManager(state, { agentId: params.agentId });
     },
 
-    resolveMemoryBackendConfig(params: { sessionKey?: string; agentId?: string } = {}) {
+    resolveMemoryBackendConfig(params: { agentId?: string } = {}) {
       return resolveHonchoMemoryBackendConfig(params);
     },
-  });
+  };
 }

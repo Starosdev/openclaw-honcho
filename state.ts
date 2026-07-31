@@ -18,15 +18,17 @@ import {
 export const OWNER_ID = "owner";
 export const LEGACY_PEER_ID = "openclaw";
 
-export function isLocalHonchoBaseUrl(baseUrl?: string): boolean {
-  const base = String(baseUrl ?? "").trim();
-  if (!base) return false;
+export const HONCHO_CLOUD_HOSTNAME = "api.honcho.dev";
 
+/**
+ * True when the base URL points at the managed Honcho cloud
+ * (api.honcho.dev). The cloud is the only deployment that requires an API
+ * key; any other base URL — localhost or a custom self-hosted domain — is
+ * treated as self-hosted.
+ */
+export function isManagedHonchoCloud(baseUrl: string): boolean {
   try {
-    const { hostname, protocol } = new URL(base);
-    if (protocol !== "http:" && protocol !== "https:") return false;
-    const normalizedHost = hostname.replace(/^\[(.*)\]$/, "$1");
-    return normalizedHost === "localhost" || normalizedHost === "127.0.0.1" || normalizedHost === "::1";
+    return new URL(baseUrl).hostname.toLowerCase() === HONCHO_CLOUD_HOSTNAME;
   } catch {
     return false;
   }
@@ -58,6 +60,8 @@ export type PluginState = {
   /** Resolve the participant peer for a session by reading participantSenderId from session metadata.
    * Falls back to default "owner" peer if no metadata found. */
   resolveSessionParticipantPeer: (sessionKey: string) => Promise<Peer>;
+  /** Drop cached participant resolution after capture updates session metadata. */
+  invalidateSessionParticipantPeer: (sessionKey: string) => void;
   /** Returns true if the given honcho peer ID belongs to a known participant peer. */
   isParticipantPeerId: (peerId: string) => boolean;
   resolveDefaultAgentId: () => string;
@@ -66,7 +70,7 @@ export type PluginState = {
 export function createPluginState(api: OpenClawPluginApi): PluginState {
   const cfg = honchoConfigSchema.parse(api.pluginConfig);
 
-  const selfHosted = isLocalHonchoBaseUrl(cfg.baseUrl);
+  const selfHosted = !isManagedHonchoCloud(cfg.baseUrl);
 
   if (!cfg.apiKey && !selfHosted) {
     api.logger.warn(
@@ -91,6 +95,7 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
   // Without this, two concurrent hooks entering init simultaneously can corrupt
   // workspace metadata. Errors propagate to all waiters.
   let initPromise: Promise<void> | null = null;
+  const sessionParticipantPeerCache = new Map<string, Promise<Peer>>();
 
   const state: PluginState = {
     honcho,
@@ -106,6 +111,7 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
     getAgentPeer,
     getParticipantPeer,
     resolveSessionParticipantPeer,
+    invalidateSessionParticipantPeer,
     isParticipantPeerId,
     resolveDefaultAgentId,
   };
@@ -184,15 +190,34 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
   }
 
   async function resolveSessionParticipantPeer(sessionKey: string): Promise<Peer> {
-    const session = await honcho.session(sessionKey);
-    const meta = await session.getMetadata();
-    if (meta && typeof meta === "object") {
-      const senderId = (meta as Record<string, unknown>).participantSenderId;
-      if (typeof senderId === "string" && senderId.length > 0) {
-        return await getParticipantPeer(senderId);
+    const cached = sessionParticipantPeerCache.get(sessionKey);
+    if (cached) return cached;
+
+    const resolution = (async () => {
+      const session = await honcho.session(sessionKey);
+      const meta = await session.getMetadata();
+      if (meta && typeof meta === "object") {
+        const senderId = (meta as Record<string, unknown>).participantSenderId;
+        if (typeof senderId === "string" && senderId.length > 0) {
+          return await getParticipantPeer(senderId);
+        }
       }
+      return await getParticipantPeer();
+    })();
+
+    sessionParticipantPeerCache.set(sessionKey, resolution);
+    try {
+      return await resolution;
+    } catch (error) {
+      if (sessionParticipantPeerCache.get(sessionKey) === resolution) {
+        sessionParticipantPeerCache.delete(sessionKey);
+      }
+      throw error;
     }
-    return await getParticipantPeer();
+  }
+
+  function invalidateSessionParticipantPeer(sessionKey: string): void {
+    sessionParticipantPeerCache.delete(sessionKey);
   }
 
   function isParticipantPeerId(peerId: string): boolean {

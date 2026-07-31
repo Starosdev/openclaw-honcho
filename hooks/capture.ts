@@ -56,7 +56,9 @@ export async function flushMessages(
     } : {}),
   };
 
-  const session = await state.honcho.session(sessionKey, { metadata: sessionMeta });
+  // Don't pass metadata: it replaces persisted metadata on existing sessions,
+  // wiping lastSavedIndex.
+  const session = await state.honcho.session(sessionKey);
   const meta = await session.getMetadata();
   const existingMeta: Record<string, unknown> =
     meta && typeof meta === "object" ? (meta as Record<string, unknown>) : {};
@@ -127,13 +129,20 @@ export async function flushMessages(
   >;
   await session.addPeers(peerConfigs);
 
-  const extracted = extractMessages(
-    newRawMessages,
-    defaultParticipantPeer,
-    agentPeer,
-    state.cfg.noisePatterns,
-    (senderId) => resolvedPeers.get(senderId),
-  );
+  // Extract one-by-one to pair each output with its raw index — needed to
+  // advance the saved-watermark safely when the batch is chunked below.
+  type ExtractedMessage = ReturnType<typeof extractMessages>[number];
+  const extracted: Array<{ message: ExtractedMessage; rawIndex: number }> = [];
+  for (let offset = 0; offset < newRawMessages.length; offset++) {
+    const [message] = extractMessages(
+      [newRawMessages[offset]],
+      defaultParticipantPeer,
+      agentPeer,
+      state.cfg.noisePatterns,
+      (senderId) => resolvedPeers.get(senderId),
+    );
+    if (message) extracted.push({ message, rawIndex: startIndex + offset });
+  }
 
   // participantSenderId = last active sender, used by tools to resolve the
   // session's current participant peer. Named "sender" (not "peer") to
@@ -149,11 +158,24 @@ export async function flushMessages(
 
   if (extracted.length === 0) {
     await session.setMetadata(updatedMeta);
+    state.invalidateSessionParticipantPeer?.(sessionKey);
     return 0;
   }
 
-  await session.addMessages(extracted);
-  await session.setMetadata(updatedMeta);
+  // Honcho rejects >100 messages per request (HTTP 422). Advance the watermark
+  // per chunk so a mid-batch failure doesn't re-send persisted chunks. Last
+  // chunk jumps to messages.length to cover trailing filtered noise messages.
+  const addMessagesLimit = 100;
+  for (let i = 0; i < extracted.length; i += addMessagesLimit) {
+    const chunk = extracted.slice(i, i + addMessagesLimit);
+    await session.addMessages(chunk.map((e) => e.message));
+    const isLastChunk = i + addMessagesLimit >= extracted.length;
+    const lastSavedIndex = isLastChunk
+      ? messages.length
+      : chunk[chunk.length - 1].rawIndex + 1;
+    await session.setMetadata({ ...updatedMeta, lastSavedIndex });
+  }
+  state.invalidateSessionParticipantPeer?.(sessionKey);
   return extracted.length;
 }
 
