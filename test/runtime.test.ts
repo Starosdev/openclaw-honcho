@@ -199,6 +199,20 @@ describe("Honcho memory runtime", () => {
     expect(state.participantPeer?.search as ReturnType<typeof vi.fn>).toHaveBeenCalled();
   });
 
+  it("does not replace persisted session metadata during search or transcript reads", async () => {
+    const state = createState("https://api.honcho.dev", { crossSessionSearch: false });
+    const { manager } = await getHonchoMemorySearchManager(state, {
+      agentId: "main",
+      sessionKey: "session-1",
+    });
+
+    await manager.search("remember", { sessionKey: "session-1" });
+    await manager.readFile({ relPath: "sessions/session-1.txt" });
+
+    const sessionCalls = (state.honcho.session as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(sessionCalls.every(([, options]) => options === undefined)).toBe(true);
+  });
+
   it("scopes search to the active session when crossSessionSearch is false", async () => {
     const state = createState("https://api.honcho.dev", { crossSessionSearch: false });
 
@@ -237,6 +251,21 @@ describe("Honcho memory runtime", () => {
     });
     expect(file.path).toBe("sessions/other-session.txt");
     expect(file.text).toContain("Other summary");
+  });
+
+  it("reuses recent transcript fetches across repeated searches", async () => {
+    const state = createState();
+    const { manager } = await getHonchoMemorySearchManager(state, {
+      agentId: "main",
+      sessionKey: "session-1",
+    });
+
+    await manager.search("anything");
+    const sessionCalls = (state.honcho.session as unknown as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    await manager.search("anything else");
+
+    expect((state.honcho.session as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(sessionCalls);
   });
 
   it("honors a per-call crossSessionSearch override", async () => {
