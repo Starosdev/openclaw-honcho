@@ -6,6 +6,18 @@ AI-native memory with dialectic reasoning for OpenClaw. Uses [Honcho's](https://
 
 This plugin uses OpenClaw's slot system (`kind: "memory"`) to replace the built-in memory plugins (`memory-core`, `memory-lancedb`). During setup, existing memory files can be migrated to Honcho. Workspace docs (`SOUL.md`, `AGENTS.md`, `BOOTSTRAP.md`) can be updated manually to reference Honcho's tools instead of the old file-based system.
 
+## Fork Note
+
+The `Starosdev/openclaw-honcho` fork carries one downstream compatibility backport for
+older Staros OpenClaw runtimes that cannot yet load upstream `v1.2.0+`.
+
+- Live Staros pin: commit `1080c2cf6ad18e940c243f72e023f9e46cd80626`
+- Backport package version: `1.1.1-staros.1`
+- Original backport branch: `fix/backport-session-key-cap-1.1.1`
+- Fork `main` now contains the merge commit that preserves that backport history,
+  but Staros should keep pinning the exact backport commit rather than tracking
+  the fork head.
+
 ## Install
 
 ```bash
