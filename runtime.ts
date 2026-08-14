@@ -173,7 +173,7 @@ export async function getHonchoMemorySearchManager(
         const rawResults: Array<any> = crossSession || !sessionKey
           ? await participantPeer.search(query, { limit })
           : await (
-              await state.honcho.session(sessionKey)
+              await state.honcho.session(sessionKey, { metadata: { agentId } })
             ).search(query, { limit });
 
         const seen = new Set<string>();

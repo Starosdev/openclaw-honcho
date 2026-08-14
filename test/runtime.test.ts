@@ -210,7 +210,10 @@ describe("Honcho memory runtime", () => {
     await manager.readFile({ relPath: "sessions/session-1.txt" });
 
     const sessionCalls = (state.honcho.session as unknown as ReturnType<typeof vi.fn>).mock.calls;
-    expect(sessionCalls.every(([, options]) => options === undefined)).toBe(true);
+    expect(sessionCalls).toEqual([
+      ["session-1", { metadata: { agentId: "main" } }],
+      ["session-1"],
+    ]);
   });
 
   it("scopes search to the active session when crossSessionSearch is false", async () => {
