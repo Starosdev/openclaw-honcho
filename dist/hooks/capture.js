@@ -116,6 +116,7 @@ export async function flushMessages(api, state, messages, ctx) {
     }
     if (extracted.length === 0) {
         await session.setMetadata(updatedMeta);
+        state.invalidateSessionParticipantPeer?.(sessionKey);
         return 0;
     }
     // Honcho rejects >100 messages per request (HTTP 422). Advance the watermark
@@ -131,6 +132,7 @@ export async function flushMessages(api, state, messages, ctx) {
             : chunk[chunk.length - 1].rawIndex + 1;
         await session.setMetadata({ ...updatedMeta, lastSavedIndex });
     }
+    state.invalidateSessionParticipantPeer?.(sessionKey);
     return extracted.length;
 }
 export function registerCaptureHook(api, state) {

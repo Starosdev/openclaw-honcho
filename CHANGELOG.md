@@ -14,6 +14,15 @@ All notable changes to `@honcho-ai/openclaw-honcho` will be documented in this f
 - **`crossSessionSearch` flag now actually toggles search strategy (#113)**: `memory_search` was always session-scoped regardless of the flag, so cross-session queries returned `[]`. Config default (`true`) now spans the participant peer's sessions; `false` scopes to the active session. Adds optional `crossSessionSearch` parameter on `memory_search` for per-call override.
 - **`flushMessages` reliability (#108)**: chunk `addMessages` under Honcho's 100/request limit and stop clobbering `lastSavedIndex`, preventing lost or duplicated messages on large or repeated flushes.
 - **No spurious API-key warning for self-hosted deployments (#109)**: only `api.honcho.dev` is treated as the managed cloud, so self-hosted instances on a custom domain no longer log a missing-API-key warning on startup and now correctly report `provider: "honcho-selfhosted"`.
+## [Fork note] - 2026-06-12
+
+### Downstream
+- **Staros compatibility backport recorded in fork history**: `Starosdev/openclaw-honcho`
+  merged the old-compatible backport history via merge commit `3d559a3`, preserving
+  backport commit `1080c2cf6ad18e940c243f72e023f9e46cd80626` (`1.1.1-staros.1`).
+  This exists for Staros deployments still pinned to `openclaw@2026.2.13`, where
+  upstream `v1.2.0+` cannot load yet. Live Staros should continue pinning the exact
+  backport commit, not the fork head.
 
 ## [1.5.1] - 2026-05-21
 

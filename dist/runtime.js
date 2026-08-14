@@ -1,6 +1,8 @@
 import { isManagedHonchoCloud } from "./state.js";
 const DEFAULT_SEARCH_RESULTS = 10;
 const MAX_SEARCH_RESULTS = 50;
+const SESSION_TRANSCRIPT_CACHE_TTL_MS = 5_000;
+const transcriptCaches = new WeakMap();
 /** Convert a Honcho session id into the generic memory tool path shape. */
 function normalizeSessionPath(sessionId) {
     return `sessions/${sessionId}.txt`;
@@ -24,11 +26,11 @@ function sliceLines(text, from = 1, lines) {
     return all.slice(start, end).join("\n");
 }
 /** Reconstruct a readable session transcript from Honcho session context data. */
-async function buildSessionTranscript(state, agentId, sessionId) {
+async function fetchSessionTranscript(state, agentId, sessionId) {
     await state.ensureInitialized();
     const participantPeer = await state.resolveSessionParticipantPeer(sessionId);
     const agentPeer = await state.getAgentPeer(agentId);
-    const session = await state.honcho.session(sessionId, { metadata: { agentId } });
+    const session = await state.honcho.session(sessionId);
     const context = await session.context({
         summary: true,
         tokens: 20000,
@@ -51,6 +53,23 @@ async function buildSessionTranscript(state, agentId, sessionId) {
         lines.push(`## ${speaker}${ts}`, msg.content ?? "", "");
     }
     return `${lines.join("\n").trimEnd()}\n`;
+}
+function buildSessionTranscript(state, agentId, sessionId) {
+    const cache = transcriptCaches.get(state) ?? new Map();
+    transcriptCaches.set(state, cache);
+    const cacheKey = `${agentId}\0${sessionId}`;
+    const now = Date.now();
+    const cached = cache.get(cacheKey);
+    if (cached && cached.expiresAt > now)
+        return cached.promise;
+    const promise = fetchSessionTranscript(state, agentId, sessionId);
+    cache.set(cacheKey, { expiresAt: now + SESSION_TRANSCRIPT_CACHE_TTL_MS, promise });
+    promise.catch(() => {
+        const current = cache.get(cacheKey);
+        if (current?.promise === promise)
+            cache.delete(cacheKey);
+    });
+    return promise;
 }
 /** Best-effort map a matched snippet back to transcript line numbers for memory_search. */
 function findSnippetLineRange(transcript, snippet) {

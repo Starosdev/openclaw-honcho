@@ -43,6 +43,8 @@ export type PluginState = {
     /** Resolve the participant peer for a session by reading participantSenderId from session metadata.
      * Falls back to default "owner" peer if no metadata found. */
     resolveSessionParticipantPeer: (sessionKey: string) => Promise<Peer>;
+    /** Drop cached participant resolution after capture updates session metadata. */
+    invalidateSessionParticipantPeer: (sessionKey: string) => void;
     /** Returns true if the given honcho peer ID belongs to a known participant peer. */
     isParticipantPeerId: (peerId: string) => boolean;
     resolveDefaultAgentId: () => string;

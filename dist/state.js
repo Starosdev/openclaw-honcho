@@ -41,6 +41,7 @@ export function createPluginState(api) {
     // Without this, two concurrent hooks entering init simultaneously can corrupt
     // workspace metadata. Errors propagate to all waiters.
     let initPromise = null;
+    const sessionParticipantPeerCache = new Map();
     const state = {
         honcho,
         cfg,
@@ -55,6 +56,7 @@ export function createPluginState(api) {
         getAgentPeer,
         getParticipantPeer,
         resolveSessionParticipantPeer,
+        invalidateSessionParticipantPeer,
         isParticipantPeerId,
         resolveDefaultAgentId,
     };
@@ -130,15 +132,33 @@ export function createPluginState(api) {
         return peer;
     }
     async function resolveSessionParticipantPeer(sessionKey) {
-        const session = await honcho.session(sessionKey);
-        const meta = await session.getMetadata();
-        if (meta && typeof meta === "object") {
-            const senderId = meta.participantSenderId;
-            if (typeof senderId === "string" && senderId.length > 0) {
-                return await getParticipantPeer(senderId);
+        const cached = sessionParticipantPeerCache.get(sessionKey);
+        if (cached)
+            return cached;
+        const resolution = (async () => {
+            const session = await honcho.session(sessionKey);
+            const meta = await session.getMetadata();
+            if (meta && typeof meta === "object") {
+                const senderId = meta.participantSenderId;
+                if (typeof senderId === "string" && senderId.length > 0) {
+                    return await getParticipantPeer(senderId);
+                }
             }
+            return await getParticipantPeer();
+        })();
+        sessionParticipantPeerCache.set(sessionKey, resolution);
+        try {
+            return await resolution;
         }
-        return await getParticipantPeer();
+        catch (error) {
+            if (sessionParticipantPeerCache.get(sessionKey) === resolution) {
+                sessionParticipantPeerCache.delete(sessionKey);
+            }
+            throw error;
+        }
+    }
+    function invalidateSessionParticipantPeer(sessionKey) {
+        sessionParticipantPeerCache.delete(sessionKey);
     }
     function isParticipantPeerId(peerId) {
         if (peerId === OWNER_ID)

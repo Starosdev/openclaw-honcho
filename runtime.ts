@@ -4,6 +4,14 @@ import { isManagedHonchoCloud, type PluginState } from "./state.js";
 
 const DEFAULT_SEARCH_RESULTS = 10;
 const MAX_SEARCH_RESULTS = 50;
+const SESSION_TRANSCRIPT_CACHE_TTL_MS = 5_000;
+
+type TranscriptCacheEntry = {
+  expiresAt: number;
+  promise: Promise<string>;
+};
+
+const transcriptCaches = new WeakMap<PluginState, Map<string, TranscriptCacheEntry>>();
 
 /** Convert a Honcho session id into the generic memory tool path shape. */
 function normalizeSessionPath(sessionId: string): string {
@@ -32,7 +40,7 @@ function sliceLines(text: string, from = 1, lines?: number): string {
 }
 
 /** Reconstruct a readable session transcript from Honcho session context data. */
-async function buildSessionTranscript(
+async function fetchSessionTranscript(
   state: PluginState,
   agentId: string,
   sessionId: string
@@ -41,7 +49,7 @@ async function buildSessionTranscript(
 
   const participantPeer = await state.resolveSessionParticipantPeer(sessionId);
   const agentPeer = await state.getAgentPeer(agentId);
-  const session = await state.honcho.session(sessionId, { metadata: { agentId } });
+  const session = await state.honcho.session(sessionId);
   const context = await session.context({
     summary: true,
     tokens: 20000,
@@ -69,6 +77,27 @@ async function buildSessionTranscript(
   }
 
   return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function buildSessionTranscript(
+  state: PluginState,
+  agentId: string,
+  sessionId: string,
+): Promise<string> {
+  const cache = transcriptCaches.get(state) ?? new Map<string, TranscriptCacheEntry>();
+  transcriptCaches.set(state, cache);
+  const cacheKey = `${agentId}\0${sessionId}`;
+  const now = Date.now();
+  const cached = cache.get(cacheKey);
+  if (cached && cached.expiresAt > now) return cached.promise;
+
+  const promise = fetchSessionTranscript(state, agentId, sessionId);
+  cache.set(cacheKey, { expiresAt: now + SESSION_TRANSCRIPT_CACHE_TTL_MS, promise });
+  promise.catch(() => {
+    const current = cache.get(cacheKey);
+    if (current?.promise === promise) cache.delete(cacheKey);
+  });
+  return promise;
 }
 
 /** Best-effort map a matched snippet back to transcript line numbers for memory_search. */

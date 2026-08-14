@@ -60,6 +60,8 @@ export type PluginState = {
   /** Resolve the participant peer for a session by reading participantSenderId from session metadata.
    * Falls back to default "owner" peer if no metadata found. */
   resolveSessionParticipantPeer: (sessionKey: string) => Promise<Peer>;
+  /** Drop cached participant resolution after capture updates session metadata. */
+  invalidateSessionParticipantPeer: (sessionKey: string) => void;
   /** Returns true if the given honcho peer ID belongs to a known participant peer. */
   isParticipantPeerId: (peerId: string) => boolean;
   resolveDefaultAgentId: () => string;
@@ -93,6 +95,7 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
   // Without this, two concurrent hooks entering init simultaneously can corrupt
   // workspace metadata. Errors propagate to all waiters.
   let initPromise: Promise<void> | null = null;
+  const sessionParticipantPeerCache = new Map<string, Promise<Peer>>();
 
   const state: PluginState = {
     honcho,
@@ -108,6 +111,7 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
     getAgentPeer,
     getParticipantPeer,
     resolveSessionParticipantPeer,
+    invalidateSessionParticipantPeer,
     isParticipantPeerId,
     resolveDefaultAgentId,
   };
@@ -186,15 +190,34 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
   }
 
   async function resolveSessionParticipantPeer(sessionKey: string): Promise<Peer> {
-    const session = await honcho.session(sessionKey);
-    const meta = await session.getMetadata();
-    if (meta && typeof meta === "object") {
-      const senderId = (meta as Record<string, unknown>).participantSenderId;
-      if (typeof senderId === "string" && senderId.length > 0) {
-        return await getParticipantPeer(senderId);
+    const cached = sessionParticipantPeerCache.get(sessionKey);
+    if (cached) return cached;
+
+    const resolution = (async () => {
+      const session = await honcho.session(sessionKey);
+      const meta = await session.getMetadata();
+      if (meta && typeof meta === "object") {
+        const senderId = (meta as Record<string, unknown>).participantSenderId;
+        if (typeof senderId === "string" && senderId.length > 0) {
+          return await getParticipantPeer(senderId);
+        }
       }
+      return await getParticipantPeer();
+    })();
+
+    sessionParticipantPeerCache.set(sessionKey, resolution);
+    try {
+      return await resolution;
+    } catch (error) {
+      if (sessionParticipantPeerCache.get(sessionKey) === resolution) {
+        sessionParticipantPeerCache.delete(sessionKey);
+      }
+      throw error;
     }
-    return await getParticipantPeer();
+  }
+
+  function invalidateSessionParticipantPeer(sessionKey: string): void {
+    sessionParticipantPeerCache.delete(sessionKey);
   }
 
   function isParticipantPeerId(peerId: string): boolean {

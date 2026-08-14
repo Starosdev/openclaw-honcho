@@ -160,6 +160,7 @@ export async function flushMessages(
 
   if (extracted.length === 0) {
     await session.setMetadata(updatedMeta);
+    state.invalidateSessionParticipantPeer?.(sessionKey);
     return 0;
   }
 
@@ -176,6 +177,7 @@ export async function flushMessages(
       : chunk[chunk.length - 1].rawIndex + 1;
     await session.setMetadata({ ...updatedMeta, lastSavedIndex });
   }
+  state.invalidateSessionParticipantPeer?.(sessionKey);
   return extracted.length;
 }
 
