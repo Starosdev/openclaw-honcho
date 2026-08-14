@@ -96,6 +96,10 @@ describe("flushMessages metadata", () => {
     expect(meta.messageProvider).toBe("discord");
     expect(meta.lastSessionId).toBe("uuid-current");
     expect(meta.agentId).toBe("main");
+    expect(session.addPeers).toHaveBeenCalledWith([
+      ["owner", { observeMe: true, observeOthers: false }],
+      ["agent-main", { observeMe: true, observeOthers: false }],
+    ]);
   });
 
   it("records participantSenderId from the latest user message in the batch", async () => {

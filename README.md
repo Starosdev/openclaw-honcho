@@ -118,9 +118,9 @@ Custom patterns are merged with the built-in defaults. Each pattern matches if t
 
 ### Owner Peer Observation
 
-Honcho's `observeOthers` controls whether a peer forms representations of other peers based on messages it witnessed in shared sessions. The agent peer always has `observeOthers: true` — it sees and reasons about the user's messages. The owner (user) peer defaults to `observeOthers: false` — modeled only from what the user said, not what the agent replied.
+Honcho's `observeOthers` controls whether a peer forms representations of other peers based on messages it witnessed in shared sessions. The owner, participant, and agent peers default to `observeOthers: false`. The agent peer still observes its own messages, while the owner peer remains the canonical source for user conclusions. This avoids duplicate `agent-main` → `owner` conclusions.
 
-Set `ownerObserveOthers: true` to let the owner peer also observe agent messages. This gives Honcho perspective-aware memory: the owner stores conclusions about the agent based only on what it witnessed, enabling the user's representation to reflect the full conversational context rather than just their own side of it.
+Set `ownerObserveOthers: true` to let owner and participant peers observe agent messages. This gives Honcho perspective-aware memory: those peers store conclusions about the agent based on what they witnessed. The agent peer remains self-observing and does not create a second model of the owner.
 
 ### Peer Mappings
 

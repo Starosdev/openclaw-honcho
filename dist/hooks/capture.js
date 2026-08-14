@@ -89,7 +89,9 @@ export async function flushMessages(api, state, messages, ctx) {
             peerConfigMap.set(peer.id, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
         }
     }
-    peerConfigMap.set(agentPeer.id, { observeMe: true, observeOthers: true });
+    // Keep owner->owner as canonical user memory. The agent peer still observes
+    // its own messages, but must not create a second agent-main->owner model.
+    peerConfigMap.set(agentPeer.id, { observeMe: true, observeOthers: false });
     if (parentPeer) {
         peerConfigMap.set(parentPeer.id, { observeMe: false, observeOthers: true });
     }
