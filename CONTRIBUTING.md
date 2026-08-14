@@ -18,6 +18,23 @@ pnpm install
 
 Note: The `postinstall` script runs `install.js` which attempts to migrate workspace files. For development, you can skip this by setting up a test workspace or ensuring `HONCHO_API_KEY` is not set (it will warn but continue).
 
+## Staros Compatibility Fork
+
+Staros Vega work uses the `Starosdev/openclaw-honcho` fork. The
+`plastic-labs/openclaw-honcho` repository is an upstream reference and release
+source only; do not push branches or open pull requests there.
+
+For fork work:
+
+1. Fetch upstream for comparison: `git fetch origin --prune`.
+2. Keep `Starosdev/openclaw-honcho:main` aligned through a fork-only sync pull request when upstream changes.
+3. Create feature branches from `starosdev/main`, then push them to the `starosdev` remote.
+4. Run focused tests and `pnpm build` before opening a pull request. Commit compiled `dist/` output because Git installs do not build TypeScript.
+5. Open pull requests only against `Starosdev/openclaw-honcho`, then deploy the exact merged fork commit.
+
+Live Vega installs must use a commit from the Starosdev fork. Never use an
+upstream branch or commit as a deploy source.
+
 ### Build
 
 ```bash
@@ -72,7 +89,7 @@ To test the plugin locally with OpenClaw:
 ### Making Changes
 
 1. **TypeScript source** is in `index.ts` and `config.ts`
-2. **Build before testing**: Always run `pnpm build` after changes
+2. **Build before testing**: Always run `pnpm build` after changes and commit the resulting `dist/` output
 3. **Tool return types**: All tool `execute` functions must return `{ content: [...], details: undefined }`
 4. **Hooks vs Tools**: Hooks receive `(event, ctx)` with session context; tools receive `(toolCallId, params, signal?)` without session context
 
