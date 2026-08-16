@@ -2,6 +2,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { PluginState } from "../state.js";
 import { buildSessionKey, extractSenderId, isSubagentSession } from "../helpers.js";
+import { buildDegradedContext, isConnectionFailure } from "../degraded.js";
 
 export function registerContextHook(api: OpenClawPluginApi, state: PluginState): void {
   api.on("before_prompt_build", async (event, ctx) => {
@@ -85,7 +86,14 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
       };
     } catch (error) {
       api.logger.warn?.(`Failed to fetch Honcho context: ${error}`);
-      return;
+      // Only when Honcho could not be reached at all. A rejected request means
+      // Honcho answered, and substituting local episodes there would hide the
+      // defect behind context that looks fine.
+      if (!isConnectionFailure(error)) return;
+      const degraded = await buildDegradedContext(state.cfg.degradedFallback);
+      if (!degraded) return;
+      api.logger.warn?.("Honcho unreachable; serving local Wonder episodes as degraded context");
+      return { appendSystemContext: degraded };
     }
   });
 }

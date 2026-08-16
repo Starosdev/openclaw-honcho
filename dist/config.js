@@ -7,6 +7,7 @@ export const DEFAULT_NOISE_PATTERNS = [
     "Execute your Session Startup sequence now",
     "Queued messages from",
 ];
+export const DEFAULT_MEMORY_PROCESS_FILE = "/opt/openclaw/vega-data/vega-memory-process.json";
 /**
  * Resolve environment variable references in config values.
  * Supports ${ENV_VAR} syntax.
@@ -64,6 +65,24 @@ export const honchoConfigSchema = {
             disableDefaultNoisePatterns,
             ownerObserveOthers: typeof cfg.ownerObserveOthers === "boolean" ? cfg.ownerObserveOthers : false,
             crossSessionSearch: typeof cfg.crossSessionSearch === "boolean" ? cfg.crossSessionSearch : true,
+            degradedFallback: (() => {
+                const raw = (cfg.degradedFallback ?? {});
+                const maxEpisodes = typeof raw.maxEpisodes === "number" &&
+                    Number.isInteger(raw.maxEpisodes) &&
+                    raw.maxEpisodes >= 1 &&
+                    raw.maxEpisodes <= 20
+                    ? raw.maxEpisodes
+                    : 5;
+                return {
+                    // On by default: a rail that has to be switched on during the outage
+                    // is not a rail. It is inert wherever the local file is absent.
+                    enabled: raw.enabled !== false,
+                    memoryProcessFile: typeof raw.memoryProcessFile === "string" && raw.memoryProcessFile.length > 0
+                        ? raw.memoryProcessFile
+                        : process.env.WONDER_MEMORY_PROCESS_FILE || DEFAULT_MEMORY_PROCESS_FILE,
+                    maxEpisodes,
+                };
+            })(),
         };
     },
 };
