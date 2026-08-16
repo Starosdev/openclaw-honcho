@@ -1,6 +1,7 @@
 /**
  * Configuration schema and parsing for the Honcho memory plugin.
  */
+import { DEFAULT_ANTI_HITS } from "./antihits.js";
 export const DEFAULT_NOISE_PATTERNS = [
     "HEARTBEAT_OK",
     "A scheduled reminder has been triggered",
@@ -65,6 +66,21 @@ export const honchoConfigSchema = {
             disableDefaultNoisePatterns,
             ownerObserveOthers: typeof cfg.ownerObserveOthers === "boolean" ? cfg.ownerObserveOthers : false,
             crossSessionSearch: typeof cfg.crossSessionSearch === "boolean" ? cfg.crossSessionSearch : true,
+            antiHits: (() => {
+                const raw = (cfg.antiHits ?? {});
+                const bounded = (value, fallback, minimum, maximum) => typeof value === "number" && Number.isFinite(value) && value >= minimum && value <= maximum
+                    ? value
+                    : fallback;
+                return {
+                    enabled: raw.enabled !== false,
+                    // Each expanded hit costs one extra search, so this bound is the
+                    // whole cost control for the tool call.
+                    expandTop: bounded(raw.expandTop, DEFAULT_ANTI_HITS.expandTop, 0, 5),
+                    expandK: bounded(raw.expandK, DEFAULT_ANTI_HITS.expandK, 1, 20),
+                    maxAntiHits: bounded(raw.maxAntiHits, DEFAULT_ANTI_HITS.maxAntiHits, 0, 10),
+                    distanceFactor: bounded(raw.distanceFactor, DEFAULT_ANTI_HITS.distanceFactor, 0.1, 1),
+                };
+            })(),
             degradedFallback: (() => {
                 const raw = (cfg.degradedFallback ?? {});
                 const maxEpisodes = typeof raw.maxEpisodes === "number" &&

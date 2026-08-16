@@ -3,6 +3,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { PluginState } from "../state.js";
 import { buildSessionKey } from "../helpers.js";
+import { collectAntiHits, formatAntiHits, type AntiHit } from "../antihits.js";
 
 export function registerSearchTool(api: OpenClawPluginApi, state: PluginState): void {
   api.registerTool(
@@ -54,11 +55,27 @@ export function registerSearchTool(api: OpenClawPluginApi, state: PluginState): 
               buildSessionKey({ sessionKey: toolCtx.sessionKey, agentId: toolCtx.agentId }),
             );
 
+        const resolvedTopK = topK ?? 10;
+        const resolvedMaxDistance = maxDistance ?? 0.5;
+
         const representation = await participantPeer.representation({
           searchQuery: query,
-          searchTopK: topK ?? 10,
-          searchMaxDistance: maxDistance ?? 0.5,
+          searchTopK: resolvedTopK,
+          searchMaxDistance: resolvedMaxDistance,
         });
+
+        // Additive and best-effort. A search that returns matches must not fail
+        // because the supersession pass did.
+        let antiHits: AntiHit[] = [];
+        try {
+          antiHits = await collectAntiHits(participantPeer.conclusions, query, {
+            topK: resolvedTopK,
+            maxDistance: resolvedMaxDistance,
+            config: state.cfg.antiHits,
+          });
+        } catch (error) {
+          api.logger.warn?.(`honcho_search_conclusions: anti-hits skipped: ${error}`);
+        }
 
         if (!representation) {
           return {
@@ -72,9 +89,16 @@ export function registerSearchTool(api: OpenClawPluginApi, state: PluginState): 
           };
         }
 
+        const antiHitsBlock = formatAntiHits(antiHits);
+        const body = antiHitsBlock ? `${representation}\n\n${antiHitsBlock}` : representation;
+
         return {
-          content: [{ type: "text", text: `## Search Results: "${query}"\n\n${representation}` }],
-          details: { query, resultCount: representation.split("\n").filter(Boolean).length },
+          content: [{ type: "text", text: `## Search Results: "${query}"\n\n${body}` }],
+          details: {
+            query,
+            resultCount: representation.split("\n").filter(Boolean).length,
+            antiHitCount: antiHits.length,
+          },
         };
       },
     }),

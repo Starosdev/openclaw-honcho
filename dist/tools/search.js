@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { buildSessionKey } from "../helpers.js";
+import { collectAntiHits, formatAntiHits } from "../antihits.js";
 export function registerSearchTool(api, state) {
     api.registerTool((toolCtx) => ({
         name: "honcho_search_conclusions",
@@ -29,11 +30,26 @@ export function registerSearchTool(api, state) {
             const participantPeer = about
                 ? await state.getParticipantPeer(about)
                 : await state.resolveSessionParticipantPeer(buildSessionKey({ sessionKey: toolCtx.sessionKey, agentId: toolCtx.agentId }));
+            const resolvedTopK = topK ?? 10;
+            const resolvedMaxDistance = maxDistance ?? 0.5;
             const representation = await participantPeer.representation({
                 searchQuery: query,
-                searchTopK: topK ?? 10,
-                searchMaxDistance: maxDistance ?? 0.5,
+                searchTopK: resolvedTopK,
+                searchMaxDistance: resolvedMaxDistance,
             });
+            // Additive and best-effort. A search that returns matches must not fail
+            // because the supersession pass did.
+            let antiHits = [];
+            try {
+                antiHits = await collectAntiHits(participantPeer.conclusions, query, {
+                    topK: resolvedTopK,
+                    maxDistance: resolvedMaxDistance,
+                    config: state.cfg.antiHits,
+                });
+            }
+            catch (error) {
+                api.logger.warn?.(`honcho_search_conclusions: anti-hits skipped: ${error}`);
+            }
             if (!representation) {
                 return {
                     content: [
@@ -45,9 +61,15 @@ export function registerSearchTool(api, state) {
                     details: { query, resultCount: 0 },
                 };
             }
+            const antiHitsBlock = formatAntiHits(antiHits);
+            const body = antiHitsBlock ? `${representation}\n\n${antiHitsBlock}` : representation;
             return {
-                content: [{ type: "text", text: `## Search Results: "${query}"\n\n${representation}` }],
-                details: { query, resultCount: representation.split("\n").filter(Boolean).length },
+                content: [{ type: "text", text: `## Search Results: "${query}"\n\n${body}` }],
+                details: {
+                    query,
+                    resultCount: representation.split("\n").filter(Boolean).length,
+                    antiHitCount: antiHits.length,
+                },
             };
         },
     }), { name: "honcho_search_conclusions" });
