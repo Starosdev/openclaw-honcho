@@ -1,6 +1,7 @@
 /**
  * Configuration schema and parsing for the Honcho memory plugin.
  */
+import { type AntiHitsConfig } from "./antihits.js";
 import type { DegradedFallbackConfig } from "./degraded.js";
 export declare const DEFAULT_NOISE_PATTERNS: string[];
 export declare const DEFAULT_MEMORY_PROCESS_FILE = "/opt/openclaw/vega-data/vega-memory-process.json";
@@ -14,6 +15,7 @@ export type HonchoConfig = {
     ownerObserveOthers: boolean;
     crossSessionSearch: boolean;
     degradedFallback: DegradedFallbackConfig;
+    antiHits: AntiHitsConfig;
 };
 export declare const honchoConfigSchema: {
     parse(value: unknown): HonchoConfig;
