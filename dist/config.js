@@ -4,6 +4,7 @@
 import { DEFAULT_ANTI_HITS } from "./antihits.js";
 export const DEFAULT_NOISE_PATTERNS = [
     "HEARTBEAT_OK",
+    "[OpenClaw heartbeat poll]",
     "A scheduled reminder has been triggered",
     "Execute your Session Startup sequence now",
     "Queued messages from",

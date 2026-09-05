@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { DEFAULT_NOISE_PATTERNS } from "../config.js";
 import { flushMessages } from "../hooks/capture.js";
 import type { PluginState } from "../state.js";
 
@@ -34,7 +35,7 @@ function createMockState(): { state: PluginState; session: SessionStub } {
 
   const state = {
     cfg: {
-      noisePatterns: [],
+      noisePatterns: DEFAULT_NOISE_PATTERNS,
       ownerObserveOthers: false,
       crossSessionSearch: true,
       workspaceId: "openclaw",
@@ -174,6 +175,24 @@ describe("flushMessages metadata", () => {
 });
 
 describe("flushMessages batching", () => {
+  it("drops synthetic heartbeat polls but preserves an attention-needed reply", async () => {
+    const { state, session } = createMockState();
+    const api = { logger: loggerStub() } as never;
+
+    const saved = await flushMessages(
+      api,
+      state,
+      [
+        { role: "user", content: "[OpenClaw heartbeat poll]", timestamp: 1 },
+        { role: "assistant", content: "Disk usage needs attention.", timestamp: 2 },
+      ],
+      { sessionKey: "agent:main:discord:dm:user-1", agentId: "main" },
+    );
+
+    expect(saved).toBe(1);
+    expect(session.addMessages).toHaveBeenCalledWith([{ text: "Disk usage needs attention." }]);
+  });
+
   it("chunks addMessages into requests of at most 100 messages", async () => {
     const { state, session } = createMockState();
     const api = { logger: loggerStub() } as never;
