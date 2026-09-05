@@ -7,6 +7,7 @@ import type { DegradedFallbackConfig } from "./degraded.js";
 
 export const DEFAULT_NOISE_PATTERNS: string[] = [
   "HEARTBEAT_OK",
+  "[OpenClaw heartbeat poll]",
   "A scheduled reminder has been triggered",
   "Execute your Session Startup sequence now",
   "Queued messages from",
