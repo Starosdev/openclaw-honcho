@@ -314,6 +314,7 @@ export function extractMessages(
   agentPeer: Peer,
   noisePatterns: string[] = [],
   resolvePeer?: (senderId: string) => Peer | undefined,
+  messageMetadata?: Record<string, unknown>,
 ): MessageInput[] {
   const result: MessageInput[] = [];
 
@@ -342,7 +343,11 @@ export function extractMessages(
     if (shouldSkipMessage(content, noisePatterns)) continue;
 
     const ts = typeof m.timestamp === "number" ? new Date(m.timestamp) : undefined;
-    result.push(peer.message(content, ts ? { createdAt: ts } : undefined));
+    const options = {
+      ...(ts ? { createdAt: ts } : {}),
+      ...(messageMetadata ? { metadata: messageMetadata } : {}),
+    };
+    result.push(peer.message(content, Object.keys(options).length > 0 ? options : undefined));
   }
 
   return result;

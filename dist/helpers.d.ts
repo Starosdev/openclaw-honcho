@@ -71,4 +71,4 @@ export declare function extractSenderId(content: string): string | undefined;
  * All other patterns match by exact equality or prefix (startsWith).
  */
 export declare function shouldSkipMessage(content: string, noisePatterns: string[]): boolean;
-export declare function extractMessages(rawMessages: unknown[], defaultParticipantPeer: Peer, agentPeer: Peer, noisePatterns?: string[], resolvePeer?: (senderId: string) => Peer | undefined): MessageInput[];
+export declare function extractMessages(rawMessages: unknown[], defaultParticipantPeer: Peer, agentPeer: Peer, noisePatterns?: string[], resolvePeer?: (senderId: string) => Peer | undefined, messageMetadata?: Record<string, unknown>): MessageInput[];
