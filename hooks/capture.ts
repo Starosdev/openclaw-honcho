@@ -22,7 +22,14 @@ export async function flushMessages(
   api: OpenClawPluginApi,
   state: PluginState,
   messages: unknown[],
-  ctx: { sessionKey?: string; agentId?: string; sessionId?: string; messageProvider?: string },
+  ctx: {
+    sessionKey?: string;
+    agentId?: string;
+    sessionId?: string;
+    messageProvider?: string;
+    runId?: string;
+    sourceMessageId?: string;
+  },
 ): Promise<number> {
   if (!messages?.length) return 0;
 
@@ -77,6 +84,15 @@ export async function flushMessages(
   }
 
   const newRawMessages = messages.slice(startIndex);
+  let lastUserOffset = -1;
+  let lastAssistantOffset = -1;
+  for (let offset = 0; offset < newRawMessages.length; offset++) {
+    const message = newRawMessages[offset];
+    if (!message || typeof message !== "object") continue;
+    const role = (message as Record<string, unknown>).role;
+    if (role === "user") lastUserOffset = offset;
+    if (role === "assistant") lastAssistantOffset = offset;
+  }
 
   // Pre-resolve participant peers for all unique sender IDs in this batch
   const senderIds = new Set<string>();
@@ -142,6 +158,14 @@ export async function flushMessages(
       agentPeer,
       state.cfg.noisePatterns,
       (senderId) => resolvedPeers.get(senderId),
+      offset === lastUserOffset && ctx.sourceMessageId
+        ? {
+            openclawMessageId: ctx.sourceMessageId,
+            ...(ctx.runId ? { openclawRunId: ctx.runId } : {}),
+          }
+        : offset === lastAssistantOffset && ctx.runId
+          ? { openclawRunId: ctx.runId }
+          : undefined,
     );
     if (message) extracted.push({ message, rawIndex: startIndex + offset });
   }
@@ -182,14 +206,40 @@ export async function flushMessages(
 }
 
 export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState): void {
+  const sourceMessageIdsByRun = new Map<string, string>();
+  // Compaction and reset can advance lastSavedIndex before agent_end runs.
+  const flushCapturedMessages = (
+    messages: unknown[],
+    ctx: {
+      sessionKey?: string;
+      agentId?: string;
+      sessionId?: string;
+      messageProvider?: string;
+      runId?: string;
+    },
+  ) => flushMessages(api, state, messages, {
+    ...ctx,
+    sourceMessageId: ctx.runId ? sourceMessageIdsByRun.get(ctx.runId) : undefined,
+  });
+
+  api.on("message_received", (event, ctx) => {
+    const runId = event.runId ?? ctx.runId;
+    const messageId = event.messageId ?? ctx.messageId;
+    if (runId && messageId) sourceMessageIdsByRun.set(runId, messageId);
+  });
+
   /**
    * agent_end — primary capture hook. Saves conversation messages after each turn.
    */
   api.on("agent_end", async (event, ctx) => {
-    if (!event.success || !event.messages?.length) return;
+    const runId = event.runId ?? ctx.runId;
+    if (!event.success || !event.messages?.length) {
+      if (runId) sourceMessageIdsByRun.delete(runId);
+      return;
+    }
 
     try {
-      await flushMessages(api, state, event.messages, ctx);
+      await flushCapturedMessages(event.messages, { ...ctx, runId });
     } catch (error) {
       api.logger.error(`[honcho] Failed to save messages to Honcho: ${error}`);
       if (error instanceof Error) {
@@ -199,6 +249,7 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
         if (anyError.body) api.logger.error(`[honcho] Body: ${JSON.stringify(anyError.body)}`);
       }
     } finally {
+      if (runId) sourceMessageIdsByRun.delete(runId);
       const sessionKey = buildSessionKey(
         { sessionKey: ctx.sessionKey, agentId: ctx.agentId },
         state.resolveDefaultAgentId,
@@ -218,7 +269,7 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
     if (!event.messages?.length) return;
 
     try {
-      const saved = await flushMessages(api, state, event.messages, ctx);
+      const saved = await flushCapturedMessages(event.messages, ctx);
       if (saved > 0) {
         api.logger.debug?.(`[honcho] Flushed ${saved} messages before compaction`);
       }
@@ -235,7 +286,7 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
     if (!event.messages?.length) return;
 
     try {
-      const saved = await flushMessages(api, state, event.messages, ctx);
+      const saved = await flushCapturedMessages(event.messages, ctx);
       if (saved > 0) {
         api.logger.debug?.(`[honcho] Flushed ${saved} messages before session reset`);
       }

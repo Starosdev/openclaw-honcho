@@ -48,6 +48,18 @@ export async function flushMessages(api, state, messages, ctx) {
         return 0;
     }
     const newRawMessages = messages.slice(startIndex);
+    let lastUserOffset = -1;
+    let lastAssistantOffset = -1;
+    for (let offset = 0; offset < newRawMessages.length; offset++) {
+        const message = newRawMessages[offset];
+        if (!message || typeof message !== "object")
+            continue;
+        const role = message.role;
+        if (role === "user")
+            lastUserOffset = offset;
+        if (role === "assistant")
+            lastAssistantOffset = offset;
+    }
     // Pre-resolve participant peers for all unique sender IDs in this batch
     const senderIds = new Set();
     let lastSenderId;
@@ -99,7 +111,14 @@ export async function flushMessages(api, state, messages, ctx) {
     await session.addPeers(peerConfigs);
     const extracted = [];
     for (let offset = 0; offset < newRawMessages.length; offset++) {
-        const [message] = extractMessages([newRawMessages[offset]], defaultParticipantPeer, agentPeer, state.cfg.noisePatterns, (senderId) => resolvedPeers.get(senderId));
+        const [message] = extractMessages([newRawMessages[offset]], defaultParticipantPeer, agentPeer, state.cfg.noisePatterns, (senderId) => resolvedPeers.get(senderId), offset === lastUserOffset && ctx.sourceMessageId
+            ? {
+                openclawMessageId: ctx.sourceMessageId,
+                ...(ctx.runId ? { openclawRunId: ctx.runId } : {}),
+            }
+            : offset === lastAssistantOffset && ctx.runId
+                ? { openclawRunId: ctx.runId }
+                : undefined);
         if (message)
             extracted.push({ message, rawIndex: startIndex + offset });
     }
@@ -136,14 +155,30 @@ export async function flushMessages(api, state, messages, ctx) {
     return extracted.length;
 }
 export function registerCaptureHook(api, state) {
+    const sourceMessageIdsByRun = new Map();
+    // Compaction and reset can advance lastSavedIndex before agent_end runs.
+    const flushCapturedMessages = (messages, ctx) => flushMessages(api, state, messages, {
+        ...ctx,
+        sourceMessageId: ctx.runId ? sourceMessageIdsByRun.get(ctx.runId) : undefined,
+    });
+    api.on("message_received", (event, ctx) => {
+        const runId = event.runId ?? ctx.runId;
+        const messageId = event.messageId ?? ctx.messageId;
+        if (runId && messageId)
+            sourceMessageIdsByRun.set(runId, messageId);
+    });
     /**
      * agent_end — primary capture hook. Saves conversation messages after each turn.
      */
     api.on("agent_end", async (event, ctx) => {
-        if (!event.success || !event.messages?.length)
+        const runId = event.runId ?? ctx.runId;
+        if (!event.success || !event.messages?.length) {
+            if (runId)
+                sourceMessageIdsByRun.delete(runId);
             return;
+        }
         try {
-            await flushMessages(api, state, event.messages, ctx);
+            await flushCapturedMessages(event.messages, { ...ctx, runId });
         }
         catch (error) {
             api.logger.error(`[honcho] Failed to save messages to Honcho: ${error}`);
@@ -157,6 +192,8 @@ export function registerCaptureHook(api, state) {
             }
         }
         finally {
+            if (runId)
+                sourceMessageIdsByRun.delete(runId);
             const sessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId: ctx.agentId }, state.resolveDefaultAgentId);
             state.turnStartIndex.delete(sessionKey);
             if (isSubagentSession(ctx))
@@ -173,7 +210,7 @@ export function registerCaptureHook(api, state) {
         if (!event.messages?.length)
             return;
         try {
-            const saved = await flushMessages(api, state, event.messages, ctx);
+            const saved = await flushCapturedMessages(event.messages, ctx);
             if (saved > 0) {
                 api.logger.debug?.(`[honcho] Flushed ${saved} messages before compaction`);
             }
@@ -190,7 +227,7 @@ export function registerCaptureHook(api, state) {
         if (!event.messages?.length)
             return;
         try {
-            const saved = await flushMessages(api, state, event.messages, ctx);
+            const saved = await flushCapturedMessages(event.messages, ctx);
             if (saved > 0) {
                 api.logger.debug?.(`[honcho] Flushed ${saved} messages before session reset`);
             }

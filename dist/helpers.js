@@ -270,7 +270,7 @@ export function shouldSkipMessage(content, noisePatterns) {
         return content === pattern || content.startsWith(pattern);
     });
 }
-export function extractMessages(rawMessages, defaultParticipantPeer, agentPeer, noisePatterns = [], resolvePeer) {
+export function extractMessages(rawMessages, defaultParticipantPeer, agentPeer, noisePatterns = [], resolvePeer, messageMetadata) {
     const result = [];
     for (const msg of rawMessages) {
         if (!msg || typeof msg !== "object")
@@ -296,7 +296,11 @@ export function extractMessages(rawMessages, defaultParticipantPeer, agentPeer, 
         if (shouldSkipMessage(content, noisePatterns))
             continue;
         const ts = typeof m.timestamp === "number" ? new Date(m.timestamp) : undefined;
-        result.push(peer.message(content, ts ? { createdAt: ts } : undefined));
+        const options = {
+            ...(ts ? { createdAt: ts } : {}),
+            ...(messageMetadata ? { metadata: messageMetadata } : {}),
+        };
+        result.push(peer.message(content, Object.keys(options).length > 0 ? options : undefined));
     }
     return result;
 }
