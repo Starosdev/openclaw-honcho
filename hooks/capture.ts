@@ -207,6 +207,7 @@ export async function flushMessages(
 
 export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState): void {
   const sourceMessageIdsByRun = new Map<string, string>();
+  const pendingSourceMessageIdsBySession = new Map<string, string>();
   // Compaction and reset can advance lastSavedIndex before agent_end runs.
   const flushCapturedMessages = (
     messages: unknown[],
@@ -225,7 +226,21 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
   api.on("message_received", (event, ctx) => {
     const runId = event.runId ?? ctx.runId;
     const messageId = event.messageId ?? ctx.messageId;
-    if (runId && messageId) sourceMessageIdsByRun.set(runId, messageId);
+    // message_received can predate runId; bind this ID when before_prompt_build supplies it.
+    if (runId && messageId) {
+      sourceMessageIdsByRun.set(runId, messageId);
+      if (ctx.sessionKey) pendingSourceMessageIdsBySession.delete(ctx.sessionKey);
+    } else if (messageId && ctx.sessionKey) {
+      pendingSourceMessageIdsBySession.set(ctx.sessionKey, messageId);
+    }
+  });
+
+  api.on("before_prompt_build", (_event, ctx) => {
+    if (!ctx.runId || !ctx.sessionKey) return;
+    const messageId = pendingSourceMessageIdsBySession.get(ctx.sessionKey);
+    if (!messageId) return;
+    pendingSourceMessageIdsBySession.delete(ctx.sessionKey);
+    sourceMessageIdsByRun.set(ctx.runId, messageId);
   });
 
   /**
@@ -235,6 +250,7 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
     const runId = event.runId ?? ctx.runId;
     if (!event.success || !event.messages?.length) {
       if (runId) sourceMessageIdsByRun.delete(runId);
+      if (ctx.sessionKey) pendingSourceMessageIdsBySession.delete(ctx.sessionKey);
       return;
     }
 
@@ -250,6 +266,7 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
       }
     } finally {
       if (runId) sourceMessageIdsByRun.delete(runId);
+      if (ctx.sessionKey) pendingSourceMessageIdsBySession.delete(ctx.sessionKey);
       const sessionKey = buildSessionKey(
         { sessionKey: ctx.sessionKey, agentId: ctx.agentId },
         state.resolveDefaultAgentId,
@@ -283,15 +300,17 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
    * This ensures no conversation data is lost when the user resets.
    */
   api.on("before_reset", async (event, ctx) => {
-    if (!event.messages?.length) return;
-
     try {
-      const saved = await flushCapturedMessages(event.messages, ctx);
-      if (saved > 0) {
-        api.logger.debug?.(`[honcho] Flushed ${saved} messages before session reset`);
+      if (event.messages?.length) {
+        const saved = await flushCapturedMessages(event.messages, ctx);
+        if (saved > 0) {
+          api.logger.debug?.(`[honcho] Flushed ${saved} messages before session reset`);
+        }
       }
     } catch (error) {
       api.logger.warn?.(`[honcho] Failed to flush messages before reset: ${error}`);
+    } finally {
+      if (ctx.sessionKey) pendingSourceMessageIdsBySession.delete(ctx.sessionKey);
     }
   });
 }

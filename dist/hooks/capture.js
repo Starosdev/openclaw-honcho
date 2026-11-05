@@ -156,6 +156,7 @@ export async function flushMessages(api, state, messages, ctx) {
 }
 export function registerCaptureHook(api, state) {
     const sourceMessageIdsByRun = new Map();
+    const pendingSourceMessageIdsBySession = new Map();
     // Compaction and reset can advance lastSavedIndex before agent_end runs.
     const flushCapturedMessages = (messages, ctx) => flushMessages(api, state, messages, {
         ...ctx,
@@ -164,8 +165,24 @@ export function registerCaptureHook(api, state) {
     api.on("message_received", (event, ctx) => {
         const runId = event.runId ?? ctx.runId;
         const messageId = event.messageId ?? ctx.messageId;
-        if (runId && messageId)
+        // message_received can predate runId; bind this ID when before_prompt_build supplies it.
+        if (runId && messageId) {
             sourceMessageIdsByRun.set(runId, messageId);
+            if (ctx.sessionKey)
+                pendingSourceMessageIdsBySession.delete(ctx.sessionKey);
+        }
+        else if (messageId && ctx.sessionKey) {
+            pendingSourceMessageIdsBySession.set(ctx.sessionKey, messageId);
+        }
+    });
+    api.on("before_prompt_build", (_event, ctx) => {
+        if (!ctx.runId || !ctx.sessionKey)
+            return;
+        const messageId = pendingSourceMessageIdsBySession.get(ctx.sessionKey);
+        if (!messageId)
+            return;
+        pendingSourceMessageIdsBySession.delete(ctx.sessionKey);
+        sourceMessageIdsByRun.set(ctx.runId, messageId);
     });
     /**
      * agent_end — primary capture hook. Saves conversation messages after each turn.
@@ -175,6 +192,8 @@ export function registerCaptureHook(api, state) {
         if (!event.success || !event.messages?.length) {
             if (runId)
                 sourceMessageIdsByRun.delete(runId);
+            if (ctx.sessionKey)
+                pendingSourceMessageIdsBySession.delete(ctx.sessionKey);
             return;
         }
         try {
@@ -194,6 +213,8 @@ export function registerCaptureHook(api, state) {
         finally {
             if (runId)
                 sourceMessageIdsByRun.delete(runId);
+            if (ctx.sessionKey)
+                pendingSourceMessageIdsBySession.delete(ctx.sessionKey);
             const sessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId: ctx.agentId }, state.resolveDefaultAgentId);
             state.turnStartIndex.delete(sessionKey);
             if (isSubagentSession(ctx))
@@ -224,16 +245,20 @@ export function registerCaptureHook(api, state) {
      * This ensures no conversation data is lost when the user resets.
      */
     api.on("before_reset", async (event, ctx) => {
-        if (!event.messages?.length)
-            return;
         try {
-            const saved = await flushCapturedMessages(event.messages, ctx);
-            if (saved > 0) {
-                api.logger.debug?.(`[honcho] Flushed ${saved} messages before session reset`);
+            if (event.messages?.length) {
+                const saved = await flushCapturedMessages(event.messages, ctx);
+                if (saved > 0) {
+                    api.logger.debug?.(`[honcho] Flushed ${saved} messages before session reset`);
+                }
             }
         }
         catch (error) {
             api.logger.warn?.(`[honcho] Failed to flush messages before reset: ${error}`);
+        }
+        finally {
+            if (ctx.sessionKey)
+                pendingSourceMessageIdsBySession.delete(ctx.sessionKey);
         }
     });
 }
