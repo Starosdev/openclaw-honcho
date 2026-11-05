@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_NOISE_PATTERNS } from "../config.js";
-import { flushMessages } from "../hooks/capture.js";
+import { flushMessages, registerCaptureHook } from "../hooks/capture.js";
 import type { PluginState } from "../state.js";
 
 const SENTINEL = "Conversation info (untrusted metadata):";
@@ -10,6 +10,7 @@ function metadataBlock(payload: Record<string, unknown>): string {
 }
 
 type CapturedMeta = Record<string, unknown>;
+type PeerStub = { id: string; message: ReturnType<typeof vi.fn> };
 
 type SessionStub = {
   metadata: CapturedMeta;
@@ -19,7 +20,7 @@ type SessionStub = {
   addMessages: ReturnType<typeof vi.fn>;
 };
 
-function createMockState(): { state: PluginState; session: SessionStub } {
+function createMockState(): { state: PluginState; session: SessionStub; ownerPeer: PeerStub } {
   const session: SessionStub = {
     metadata: {},
     getMetadata: vi.fn(async () => session.metadata),
@@ -57,7 +58,7 @@ function createMockState(): { state: PluginState; session: SessionStub } {
     resolveDefaultAgentId: vi.fn(() => "main"),
   } as unknown as PluginState;
 
-  return { state, session };
+  return { state, session, ownerPeer };
 }
 
 function loggerStub() {
@@ -171,6 +172,49 @@ describe("flushMessages metadata", () => {
 
     expect(session.metadata).not.toHaveProperty("messageProvider");
     expect(session.metadata).not.toHaveProperty("lastSessionId");
+  });
+});
+
+describe("registerCaptureHook source IDs", () => {
+  it("binds inbound source ID to run before compaction flush", async () => {
+    const { state, session, ownerPeer } = createMockState();
+    type Handler = (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown;
+    const handlers = new Map<string, Handler>();
+    const api = {
+      logger: loggerStub(),
+      on: (name: string, handler: Handler) => handlers.set(name, handler),
+    } as never;
+    const sessionKey = "agent:main:discord:dm:user-1";
+    const messages = [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "reply" },
+    ];
+
+    registerCaptureHook(api, state);
+    handlers.get("message_received")?.(
+      { messageId: "provider-message-1" },
+      { messageId: "provider-message-1", sessionKey },
+    );
+    await handlers.get("before_prompt_build")?.(
+      { prompt: "hello" },
+      { runId: "run-1", sessionKey },
+    );
+    await handlers.get("before_compaction")?.(
+      { messages },
+      { agentId: "main", runId: "run-1", sessionKey },
+    );
+
+    expect(ownerPeer.message).toHaveBeenCalledWith("hello", {
+      metadata: { openclawMessageId: "provider-message-1", openclawRunId: "run-1" },
+    });
+    expect(session.addMessages).toHaveBeenCalledOnce();
+
+    await handlers.get("agent_end")?.(
+      { messages, success: true },
+      { agentId: "main", runId: "run-1", sessionKey },
+    );
+
+    expect(session.addMessages).toHaveBeenCalledOnce();
   });
 });
 

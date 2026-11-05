@@ -92,6 +92,7 @@ To test the plugin locally with OpenClaw:
 2. **Build before testing**: Always run `pnpm build` after changes and commit the resulting `dist/` output
 3. **Tool return types**: All tool `execute` functions must return `{ content: [...], details: undefined }`
 4. **Hooks vs Tools**: Hooks receive `(event, ctx)` with session context; tools receive `(toolCallId, params, signal?)` without session context
+5. **Inbound hook correlation**: OpenClaw's `message_received` may omit `runId`. Keep provider `messageId` pending by `sessionKey`, bind it when `before_prompt_build` supplies `runId`, then key flush lookup by `runId`.
 
 ### Install Script Behavior
 
