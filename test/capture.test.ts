@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_NOISE_PATTERNS } from "../config.js";
 import { flushMessages, registerCaptureHook } from "../hooks/capture.js";
+import { buildSessionKey } from "../helpers.js";
 import type { PluginState } from "../state.js";
 
 const SENTINEL = "Conversation info (untrusted metadata):";
@@ -32,7 +33,10 @@ function createMockState(): { state: PluginState; session: SessionStub; ownerPee
   };
 
   const agentPeer = { id: "agent-main", message: vi.fn((text: string) => ({ text })) };
-  const ownerPeer = { id: "owner", message: vi.fn((text: string) => ({ text })) };
+  const ownerPeer = {
+    id: "owner",
+    message: vi.fn((text: string, options?: { metadata?: CapturedMeta }) => ({ text, ...options })),
+  };
 
   const state = {
     cfg: {
@@ -176,6 +180,32 @@ describe("flushMessages metadata", () => {
 });
 
 describe("registerCaptureHook source IDs", () => {
+  it("persists the exact ClawTalk user turn after repeated prompt builds without an inbound hook", async () => {
+    const { state, session } = createMockState();
+    type Handler = (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown;
+    const handlers = new Map<string, Handler>();
+    const api = {
+      logger: loggerStub(),
+      on: (name: string, handler: Handler) => handlers.set(name, handler),
+    } as never;
+    const ctx = { agentId: "main", sessionKey: "agent:main:clawtalk-user:device:abc", runId: "run-2" };
+    const messages = [
+      { role: "user", content: "old turn", idempotencyKey: "run-1:user" },
+      { role: "assistant", content: "old reply" },
+      { role: "user", content: "new turn", idempotencyKey: "run-2:user" },
+      { role: "assistant", content: "new reply" },
+    ];
+    registerCaptureHook(api, state);
+    state.turnStartIndex.set(buildSessionKey(ctx), messages.length);
+    await handlers.get("agent_end")?.({ messages, success: true }, ctx);
+    expect(session.addMessages).toHaveBeenCalledWith([
+      { text: "new turn", metadata: { openclawMessageId: "run-2", openclawRunId: "run-2" } },
+      { text: "new reply" },
+    ]);
+    await handlers.get("agent_end")?.({ messages, success: true }, ctx);
+    expect(session.addMessages).toHaveBeenCalledOnce();
+  });
+
   it("binds inbound source ID to run before compaction flush", async () => {
     const { state, session, ownerPeer } = createMockState();
     type Handler = (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown;

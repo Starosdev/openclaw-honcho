@@ -39,7 +39,9 @@ export function registerContextHook(api, state) {
                 }
             }
             else {
-                const session = await state.honcho.session(sessionKey, { metadata: { agentId } });
+                // Honcho replaces session metadata when supplied here. Capture owns
+                // its persisted watermark and session provenance.
+                const session = await state.honcho.session(sessionKey);
                 let context;
                 try {
                     context = await session.context({
