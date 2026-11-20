@@ -64,7 +64,8 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
             ...(recall.scope ? {} : { peerPerspective: agentPeer }),
             ...recall,
           });
-          card = context.peerCard;
+          // Older Honcho servers can return a workspace card in session mode.
+          card = recall.limitToSession ? undefined : context.peerCard;
           representation = context.peerRepresentation;
           summary = context.summary?.content;
         }

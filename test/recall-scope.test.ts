@@ -36,15 +36,19 @@ function mkState(recall: Record<string, unknown>) {
 }
 
 /** Run the before_prompt_build hook and return the session.context() arguments. */
-async function contextArgs(recall: Record<string, unknown>) {
+async function runContext(recall: Record<string, unknown>) {
   const { state, session } = mkState(recall);
   let handler: ((e: unknown, c: unknown) => Promise<unknown>) | undefined;
   registerContextHook(
     { on: (n: string, fn: never) => { if (n === "before_prompt_build") handler = fn; }, logger } as never,
     state,
   );
-  await handler?.({ prompt: "a real prompt", messages: [] }, ctx);
-  return session.context.mock.calls[0]?.[0] ?? {};
+  const result = await handler?.({ prompt: "a real prompt", messages: [] }, ctx);
+  return { args: session.context.mock.calls[0]?.[0] ?? {}, result };
+}
+
+async function contextArgs(recall: Record<string, unknown>) {
+  return (await runContext(recall)).args;
 }
 
 /** Run honcho_ask and return the peer.chat() options. */
@@ -73,6 +77,12 @@ describe("recall boundaries are applied per path", () => {
   it("narrows to the session when asked", async () => {
     expect((await contextArgs({ automatic: "session" })).limitToSession).toBe(true);
     expect((await askArgs({ ask: "session" })).session).toBe(buildSessionKey(ctx));
+  });
+
+  it("omits the workspace card when an older server returns it in session mode", async () => {
+    const { result } = await runContext({ automatic: "session" });
+    expect(result).toEqual({ appendSystemContext: expect.stringContaining("User context:\nrep") });
+    expect(result).toEqual({ appendSystemContext: expect.not.stringContaining("Key facts:") });
   });
 
   it("asks against the capture session when the tool context omits agentId", async () => {

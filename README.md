@@ -235,9 +235,9 @@ hand rather than everything the peer has ever said:
 | `session` | The current Honcho session only. | **Dropped.** |
 | `scope` | The sessions belonging to `scopeName`, a [Honcho scope](https://docs.honcho.dev). Needs a workspace-level API key. A scope that exists but has no member sessions returns nothing rather than widening; a missing or blank `scopeName` falls back to `session` (see below). | The scope's own card. |
 
-`session` drops the peer card because a card has no session dimension — it is
-synthesized from everything the observer has seen, so Honcho cannot narrow it and
-withholds it rather than leak past the boundary.
+`automatic: "session"` discards the peer card because a card has no session
+dimension. This also covers older Honcho servers that still return the workspace
+card with session filtering.
 
 `ask: "session"` scopes conclusions but not the card: `peer.chat` fetches it
 unconditionally upstream. `automatic: "session"` is a true boundary; `ask: "session"`
