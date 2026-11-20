@@ -87,10 +87,12 @@ describe("memory passthrough tools", () => {
     expect(getHonchoMemorySearchManagerMock).toHaveBeenNthCalledWith(1, {}, {
       agentId: "main",
       sessionKey: expect.stringMatching(/^chat-dashboard-main-[0-9a-f]{24}$/),
+      requester: ctx,
     });
     expect(getHonchoMemorySearchManagerMock).toHaveBeenNthCalledWith(2, {}, {
       agentId: "main",
       sessionKey: expect.stringMatching(/^chat-dashboard-main-[0-9a-f]{24}$/),
+      requester: ctx,
     });
   });
 
@@ -120,6 +122,7 @@ describe("memory passthrough tools", () => {
     expect(getHonchoMemorySearchManagerMock).toHaveBeenCalledWith({}, {
       agentId: "main",
       sessionKey: expect.stringMatching(/^chat-dashboard-main-[0-9a-f]{24}$/),
+      requester: ctx,
     });
   });
 });

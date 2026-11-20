@@ -82,14 +82,13 @@ export function registerMemoryPassthrough(api, state) {
             const maxResults = readNumberParam(p, "maxResults");
             readNumberParam(p, "minScore");
             const crossSessionSearch = typeof p.crossSessionSearch === "boolean" ? p.crossSessionSearch : undefined;
-            const honchoSessionKey = buildSessionKey({
-                sessionKey: ctx.sessionKey,
-                agentId: ctx.agentId,
-            });
+            const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
+            const honchoSessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId });
             try {
                 const { manager } = await getHonchoMemorySearchManager(state, {
-                    agentId: ctx.agentId,
+                    agentId,
                     sessionKey: honchoSessionKey,
+                    requester: ctx,
                 });
                 const results = await manager.search(query, {
                     maxResults: maxResults ?? undefined,
@@ -119,14 +118,13 @@ export function registerMemoryPassthrough(api, state) {
             const relPath = readStringParam(p, "path", { required: true });
             const from = readNumberParam(p, "from", { integer: true });
             const lines = readNumberParam(p, "lines", { integer: true });
-            const honchoSessionKey = buildSessionKey({
-                sessionKey: ctx.sessionKey,
-                agentId: ctx.agentId,
-            });
+            const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
+            const honchoSessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId });
             try {
                 const { manager } = await getHonchoMemorySearchManager(state, {
-                    agentId: ctx.agentId,
+                    agentId,
                     sessionKey: honchoSessionKey,
+                    requester: ctx,
                 });
                 const result = await manager.readFile({
                     relPath,

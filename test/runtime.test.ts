@@ -5,6 +5,68 @@ import {
   resolveHonchoMemoryBackendConfig,
 } from "../runtime.js";
 import type { PluginState } from "../state.js";
+import { registerMemoryPassthrough } from "../tools/memory-passthrough.js";
+import { buildSessionKey } from "../helpers.js";
+
+it("keeps canonical memory tools within the trusted requester's messages", async () => {
+  const state = createState();
+  const sessionId = "session-1";
+  const path = `sessions/${sessionId}.txt`;
+  const participantMessage = { peerId: "alice", sessionId, content: "Alice's note" };
+  const otherMessage = { peerId: "owner", sessionId, content: "Owner's note" };
+  const session = {
+    id: sessionId,
+    context: vi.fn(async () => ({
+      summary: { content: "Shared summary" },
+      messages: [participantMessage, otherMessage],
+    })),
+  };
+  const participant = {
+    id: "alice",
+    search: vi.fn(async () => [participantMessage, otherMessage]),
+    sessions: vi.fn(async () => ({ items: [session] })),
+  };
+  state.resolveToolParticipantPeer = vi.fn(async ({ requesterSenderId, senderIsOwner }) => {
+    if (senderIsOwner) return state.participantPeer!;
+    if (requesterSenderId === "alice") return participant;
+    throw new Error("Honcho requires a trusted requester identity.");
+  }) as never;
+  const factories = new Map<string, (ctx: Record<string, unknown>) => {
+    execute: (id: string, params: Record<string, unknown>) => Promise<{ details: unknown }>;
+  }>();
+  registerMemoryPassthrough({
+    registerTool: (factory: never, opts: { name: string }) => factories.set(opts.name, factory),
+  } as never, state);
+  const common = { agentId: "main", sessionKey: "agent:main:discord:group:test" };
+  const alice = { ...common, requesterSenderId: "alice" };
+  const owner = { ...common, senderIsOwner: true };
+  const search = factories.get("memory_search")!;
+  const get = factories.get("memory_get")!;
+
+  // Warm the transcript cache with an owner read before another participant reads it.
+  expect((await get(owner).execute("owner", { path })).details).toMatchObject({
+    text: expect.stringContaining("Summary for session one"),
+  });
+  const aliceSearch = (await search(alice).execute("search", { query: "note" })).details;
+  expect(aliceSearch).toMatchObject({ results: [{ path, snippet: "Alice's note", startLine: 2 }] });
+  const aliceRead = (await get(alice).execute("read", { path, from: 2, lines: 1 })).details;
+  expect(aliceRead).toEqual({ path, text: "Alice's note" });
+  const transcript = (await get(alice).execute("full", { path })).details;
+  expect(transcript).toEqual({ path, text: "## User\nAlice's note\n" });
+  expect((await get(alice).execute("unrelated", { path: "sessions/other-session.txt" })).details)
+    .toMatchObject({ text: "", disabled: true });
+  expect((await search(alice).execute("scoped", { query: "note", crossSessionSearch: false })).details)
+    .toMatchObject({ results: [] });
+  expect(participant.search).toHaveBeenLastCalledWith("note", {
+    limit: 10, filters: { session_id: buildSessionKey(common) },
+  });
+  expect((await search(common).execute("unknown", { query: "note" })).details).toMatchObject({
+    results: [], disabled: true,
+  });
+  expect((await get(common).execute("unknown", { path })).details).toMatchObject({
+    text: "", disabled: true,
+  });
+});
 
 type TestState = PluginState & {
   participantPeer: {
@@ -209,11 +271,9 @@ describe("Honcho memory runtime", () => {
     await manager.search("remember", { sessionKey: "session-1" });
     await manager.readFile({ relPath: "sessions/session-1.txt" });
 
-    const sessionCalls = (state.honcho.session as unknown as ReturnType<typeof vi.fn>).mock.calls;
-    expect(sessionCalls).toEqual([
-      ["session-1", { metadata: { agentId: "main" } }],
-      ["session-1"],
-    ]);
+    const sessionCalls = vi.mocked(state.honcho.session).mock.calls;
+    expect(sessionCalls).toContainEqual(["session-1"]);
+    expect(sessionCalls.every(([, options]) => options?.metadata === undefined)).toBe(true);
   });
 
   it("scopes search to the active session when crossSessionSearch is false", async () => {

@@ -1,6 +1,7 @@
 // @ts-ignore - resolved by openclaw runtime
 import type { MemoryPluginCapability } from "openclaw/plugin-sdk/core";
-import { isManagedHonchoCloud, type PluginState } from "./state.js";
+import type { Peer } from "@honcho-ai/sdk";
+import { isManagedHonchoCloud, type PluginState, type ToolRequester } from "./state.js";
 
 const DEFAULT_SEARCH_RESULTS = 10;
 const MAX_SEARCH_RESULTS = 50;
@@ -43,27 +44,35 @@ function sliceLines(text: string, from = 1, lines?: number): string {
 async function fetchSessionTranscript(
   state: PluginState,
   agentId: string,
-  sessionId: string
+  sessionId: string,
+  restrictedPeer?: Peer,
 ): Promise<string> {
   await state.ensureInitialized();
 
-  const participantPeer = await state.resolveSessionParticipantPeer(sessionId);
+  const participantPeer = restrictedPeer ?? await state.resolveSessionParticipantPeer(sessionId);
+  // Check membership without creating a session from a requester-supplied path.
+  const session = restrictedPeer
+    ? (await restrictedPeer.sessions({ filters: { id: sessionId }, size: 1 }))
+        .items.find((candidate) => candidate.id === sessionId)
+    : await state.honcho.session(sessionId);
+  if (!session) throw new Error("Honcho memory path is unavailable.");
   const agentPeer = await state.getAgentPeer(agentId);
-  const session = await state.honcho.session(sessionId);
   const context = await session.context({
-    summary: true,
+    summary: !restrictedPeer,
     tokens: 20000,
     peerTarget: participantPeer,
     peerPerspective: agentPeer,
+    ...(restrictedPeer ? { limitToSession: true } : {}),
   });
 
   const lines: string[] = [];
 
-  if (context.summary?.content) {
+  if (!restrictedPeer && context.summary?.content) {
     lines.push("# Summary", context.summary.content, "");
   }
 
   for (const msg of context.messages ?? []) {
+    if (restrictedPeer && msg.peerId !== restrictedPeer.id) continue;
     const speaker =
       msg.peerId === participantPeer.id
         ? "User"
@@ -83,15 +92,16 @@ function buildSessionTranscript(
   state: PluginState,
   agentId: string,
   sessionId: string,
+  restrictedPeer?: Peer,
 ): Promise<string> {
   const cache = transcriptCaches.get(state) ?? new Map<string, TranscriptCacheEntry>();
   transcriptCaches.set(state, cache);
-  const cacheKey = `${agentId}\0${sessionId}`;
+  const cacheKey = `${agentId}\0${sessionId}\0${restrictedPeer?.id ?? ""}`;
   const now = Date.now();
   const cached = cache.get(cacheKey);
   if (cached && cached.expiresAt > now) return cached.promise;
 
-  const promise = fetchSessionTranscript(state, agentId, sessionId);
+  const promise = fetchSessionTranscript(state, agentId, sessionId, restrictedPeer);
   cache.set(cacheKey, { expiresAt: now + SESSION_TRANSCRIPT_CACHE_TTL_MS, promise });
   promise.catch(() => {
     const current = cache.get(cacheKey);
@@ -147,11 +157,15 @@ function findSnippetLineRange(transcript: string, snippet: string): { startLine:
  */
 export async function getHonchoMemorySearchManager(
   state: PluginState,
-  params: { agentId?: string; sessionKey?: string } = {}
+  params: { agentId?: string; sessionKey?: string; requester?: ToolRequester } = {}
 ) {
   const { agentId = state.resolveDefaultAgentId(), sessionKey: activeSessionKey } = params;
 
   await state.ensureInitialized();
+  const requesterPeer = params.requester
+    ? await state.resolveToolParticipantPeer(params.requester)
+    : undefined;
+  const restrictedPeer = params.requester?.senderIsOwner === true ? undefined : requesterPeer;
 
   return {
     manager: {
@@ -161,20 +175,23 @@ export async function getHonchoMemorySearchManager(
         // fall back to the key captured at manager creation for the legacy /
         // passthrough-tool path.
         const sessionKey = opts.sessionKey ?? activeSessionKey;
-        const participantPeer = sessionKey
+        const participantPeer = requesterPeer ?? (sessionKey
           ? await state.resolveSessionParticipantPeer(sessionKey)
-          : await state.getParticipantPeer();
+          : await state.getParticipantPeer());
         const requested = Number.isFinite(opts.maxResults)
           ? Number(opts.maxResults)
           : DEFAULT_SEARCH_RESULTS;
         const limit = Math.min(MAX_SEARCH_RESULTS, Math.max(1, Math.trunc(requested)));
 
         const crossSession = opts.crossSessionSearch ?? state.cfg.crossSessionSearch;
-        const rawResults: Array<any> = crossSession || !sessionKey
-          ? await participantPeer.search(query, { limit })
-          : await (
-              await state.honcho.session(sessionKey, { metadata: { agentId } })
-            ).search(query, { limit });
+        const rawResults: Array<any> = !restrictedPeer && !crossSession && sessionKey
+          ? await (await state.honcho.session(sessionKey)).search(query, { limit })
+          : await participantPeer.search(query, {
+              limit,
+              ...(restrictedPeer && !crossSession && sessionKey
+                ? { filters: { session_id: sessionKey } }
+                : {}),
+            });
 
         const seen = new Set<string>();
         const filtered: Array<any> = [];
@@ -182,6 +199,9 @@ export async function getHonchoMemorySearchManager(
           if (filtered.length >= limit) break;
           const sessionId = typeof msg?.sessionId === "string" ? msg.sessionId : "";
           if (!sessionId) continue;
+          if (restrictedPeer && (
+            msg.peerId !== restrictedPeer.id || (!crossSession && sessionId !== sessionKey)
+          )) continue;
           const dedupeKey = `${sessionId}:${String(msg?.id ?? msg?.createdAt ?? msg?.content ?? "")}`;
           if (seen.has(dedupeKey)) continue;
           seen.add(dedupeKey);
@@ -194,7 +214,7 @@ export async function getHonchoMemorySearchManager(
             const snippet = typeof msg.content === "string" ? msg.content : "";
             let transcriptPromise = transcriptCache.get(msg.sessionId);
             if (!transcriptPromise) {
-              transcriptPromise = buildSessionTranscript(state, agentId, msg.sessionId);
+              transcriptPromise = buildSessionTranscript(state, agentId, msg.sessionId, restrictedPeer);
               transcriptCache.set(msg.sessionId, transcriptPromise);
             }
             const transcript = await transcriptPromise;
@@ -220,7 +240,7 @@ export async function getHonchoMemorySearchManager(
           throw new Error(`Requested Honcho memory path is outside the active session: ${params.relPath}`);
         }
 
-        const transcript = await buildSessionTranscript(state, agentId, sessionId);
+        const transcript = await buildSessionTranscript(state, agentId, sessionId, restrictedPeer);
         return {
           path: params.relPath,
           text: sliceLines(transcript, params.from, params.lines),

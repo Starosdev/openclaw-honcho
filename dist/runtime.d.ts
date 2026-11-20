@@ -1,5 +1,5 @@
 import type { MemoryPluginCapability } from "openclaw/plugin-sdk/core";
-import { type PluginState } from "./state.js";
+import { type PluginState, type ToolRequester } from "./state.js";
 /**
  * Build a Honcho-backed memory manager that satisfies OpenClaw's active-memory contract.
  *
@@ -9,6 +9,7 @@ import { type PluginState } from "./state.js";
 export declare function getHonchoMemorySearchManager(state: PluginState, params?: {
     agentId?: string;
     sessionKey?: string;
+    requester?: ToolRequester;
 }): Promise<{
     manager: {
         search(query: string, opts?: {
