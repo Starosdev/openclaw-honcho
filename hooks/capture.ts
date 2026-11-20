@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 // @ts-ignore - resolved by openclaw runtime
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { PluginState } from "../state.js";
@@ -12,6 +13,24 @@ import {
   getRawContent,
 } from "../helpers.js";
 import { subagentParentMap } from "./subagent.js";
+
+function traceCapture(
+  api: OpenClawPluginApi,
+  ctx: { sessionKey?: string; channelId?: string },
+  stage: string,
+  facts: Record<string, boolean | number> = {},
+): boolean {
+  if (!ctx.sessionKey?.includes(":clawtalk") && (ctx.sessionKey || ctx.channelId !== "webchat")) return false;
+  try {
+    const armed = statSync("/tmp/openclaw-honcho-inf-4391.trace", { throwIfNoEntry: false });
+    const age = armed ? Date.now() - armed.mtimeMs : -1;
+    if (!armed?.isFile() || age < 0 || age >= 15 * 60_000) return false;
+    api.logger.info(`[honcho-trace INF-4391] ${stage} ${JSON.stringify(facts)}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Core message capture logic shared by agent_end, before_compaction, and before_reset.
@@ -80,6 +99,7 @@ export async function flushMessages(
   const startIndex = Math.max(turnStartIndex, lastSavedIndex);
 
   if (messages.length <= startIndex) {
+    traceCapture(api, ctx, "watermark_skip", { messages: messages.length, turnStartIndex, lastSavedIndex });
     return 0;
   }
 
@@ -183,6 +203,7 @@ export async function flushMessages(
   }
 
   if (extracted.length === 0) {
+    traceCapture(api, ctx, "filtered_all", { userCandidate: lastUserOffset >= 0, sourceId: Boolean(ctx.sourceMessageId) });
     await session.setMetadata(updatedMeta);
     state.invalidateSessionParticipantPeer?.(sessionKey);
     return 0;
@@ -194,7 +215,14 @@ export async function flushMessages(
   const addMessagesLimit = 100;
   for (let i = 0; i < extracted.length; i += addMessagesLimit) {
     const chunk = extracted.slice(i, i + addMessagesLimit);
-    await session.addMessages(chunk.map((e) => e.message));
+    traceCapture(api, ctx, "write_start", { rows: chunk.length, userCandidate: lastUserOffset >= 0, sourceId: Boolean(ctx.sourceMessageId), runId: Boolean(ctx.runId) });
+    try {
+      await session.addMessages(chunk.map((e) => e.message));
+    } catch (error) {
+      traceCapture(api, ctx, "write_failed");
+      throw error;
+    }
+    traceCapture(api, ctx, "write_ok");
     const isLastChunk = i + addMessagesLimit >= extracted.length;
     const lastSavedIndex = isLastChunk
       ? messages.length
@@ -226,6 +254,7 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
   api.on("message_received", (event, ctx) => {
     const runId = event.runId ?? ctx.runId;
     const messageId = event.messageId ?? ctx.messageId;
+    traceCapture(api, ctx, "message_received", { runId: Boolean(runId), messageId: Boolean(messageId), sessionKey: Boolean(ctx.sessionKey) });
     // message_received can predate runId; bind this ID when before_prompt_build supplies it.
     if (runId && messageId) {
       sourceMessageIdsByRun.set(runId, messageId);
@@ -236,6 +265,7 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
   });
 
   api.on("before_prompt_build", (_event, ctx) => {
+    traceCapture(api, ctx, "before_prompt_build", { runId: Boolean(ctx.runId), pendingId: Boolean(ctx.sessionKey && pendingSourceMessageIdsBySession.has(ctx.sessionKey)) });
     if (!ctx.runId || !ctx.sessionKey) return;
     const messageId = pendingSourceMessageIdsBySession.get(ctx.sessionKey);
     if (!messageId) return;
@@ -248,6 +278,7 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
    */
   api.on("agent_end", async (event, ctx) => {
     const runId = event.runId ?? ctx.runId;
+    traceCapture(api, ctx, "agent_end", { success: Boolean(event.success), messages: event.messages?.length ?? 0, runId: Boolean(runId), boundId: Boolean(runId && sourceMessageIdsByRun.has(runId)) });
     if (!event.success || !event.messages?.length) {
       if (runId) sourceMessageIdsByRun.delete(runId);
       if (ctx.sessionKey) pendingSourceMessageIdsBySession.delete(ctx.sessionKey);
@@ -257,6 +288,7 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
     try {
       await flushCapturedMessages(event.messages, { ...ctx, runId });
     } catch (error) {
+      if (traceCapture(api, ctx, "capture_failed")) return;
       api.logger.error(`[honcho] Failed to save messages to Honcho: ${error}`);
       if (error instanceof Error) {
         api.logger.error(`[honcho] Stack: ${error.stack}`);
