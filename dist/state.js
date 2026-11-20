@@ -57,6 +57,7 @@ export function createPluginState(api) {
         getParticipantPeer,
         resolveSessionParticipantPeer,
         invalidateSessionParticipantPeer,
+        resolveToolParticipantPeer,
         isParticipantPeerId,
         resolveDefaultAgentId,
     };
@@ -159,6 +160,23 @@ export function createPluginState(api) {
     }
     function invalidateSessionParticipantPeer(sessionKey) {
         sessionParticipantPeerCache.delete(sessionKey);
+    }
+    async function resolveToolParticipantPeer(requester) {
+        // Session metadata names whoever capture saw last, which in a shared
+        // session is often not the person asking. The tool context names the
+        // requester for this run, the same sender capture will attribute it to.
+        const senderId = requester.requesterSenderId?.trim();
+        if (senderId) {
+            const peer = await getParticipantPeer(senderId);
+            if (peer.id !== OWNER_ID || requester.senderIsOwner === true)
+                return peer;
+            throw new Error("Honcho owner memory requires a verified owner.");
+        }
+        // Operator turns (TUI, Control UI) carry no sender id; capture files them
+        // under the owner peer, so read them back from there.
+        if (requester.senderIsOwner === true)
+            return getParticipantPeer();
+        throw new Error("Honcho requires a trusted requester identity.");
     }
     function isParticipantPeerId(peerId) {
         if (peerId === OWNER_ID)

@@ -2,7 +2,6 @@ import { Type } from "@sinclair/typebox";
 // @ts-ignore - resolved by openclaw runtime
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { PluginState } from "../state.js";
-import { buildSessionKey } from "../helpers.js";
 
 export function registerContextTool(api: OpenClawPluginApi, state: PluginState): void {
   api.registerTool(
@@ -20,24 +19,14 @@ export function registerContextTool(api: OpenClawPluginApi, state: PluginState):
               description: "Detail level: 'card' for key facts (default, fast), 'full' for broad representation.",
             })
           ),
-          about: Type.Optional(
-            Type.String({
-              description:
-                "Sender ID of the user to query about. Defaults to the last active sender. Pass a specific sender_id to get context about a different participant.",
-            })
-          ),
         },
         { additionalProperties: false }
       ),
       async execute(_toolCallId, params) {
-        const { detail = "card", about } = params as { detail?: "card" | "full"; about?: string };
+        const { detail = "card" } = params as { detail?: "card" | "full" };
 
         await state.ensureInitialized();
-        const participantPeer = about
-          ? await state.getParticipantPeer(about)
-          : await state.resolveSessionParticipantPeer(
-              buildSessionKey({ sessionKey: toolCtx.sessionKey, agentId: toolCtx.agentId }),
-            );
+        const participantPeer = await state.resolveToolParticipantPeer(toolCtx);
 
         if (detail === "card") {
           const card = await participantPeer.card().catch((err) => {
