@@ -19,6 +19,7 @@ type SessionStub = {
   getMetadata: ReturnType<typeof vi.fn>;
   addPeers: ReturnType<typeof vi.fn>;
   addMessages: ReturnType<typeof vi.fn>;
+  messages: ReturnType<typeof vi.fn>;
 };
 
 function createMockState(): { state: PluginState; session: SessionStub; ownerPeer: PeerStub } {
@@ -30,6 +31,13 @@ function createMockState(): { state: PluginState; session: SessionStub; ownerPee
     }),
     addPeers: vi.fn(async () => undefined),
     addMessages: vi.fn(async () => undefined),
+    messages: vi.fn(async ({ filters }: { filters: { metadata: CapturedMeta } }) => ({
+      items: session.addMessages.mock.calls.flatMap(([messages]) => messages).filter(
+        (message: { metadata?: CapturedMeta }) => Object.entries(filters.metadata).every(
+          ([key, value]) => message.metadata?.[key] === value,
+        ),
+      ),
+    })),
   };
 
   const agentPeer = { id: "agent-main", message: vi.fn((text: string) => ({ text })) };
@@ -180,6 +188,35 @@ describe("flushMessages metadata", () => {
 });
 
 describe("registerCaptureHook source IDs", () => {
+  it("captures the exact ClawTalk user when the saved index belongs to an earlier message window", async () => {
+    const { state, session } = createMockState();
+    type Handler = (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown;
+    const handlers = new Map<string, Handler>();
+    const api = {
+      logger: loggerStub(),
+      on: (name: string, handler: Handler) => handlers.set(name, handler),
+    } as never;
+    const ctx = { agentId: "main", sessionKey: "agent:main:clawtalk-user:device:abc", runId: "run-2" };
+    const messages = [
+      { role: "user", content: "current user turn", idempotencyKey: "run-2:user" },
+      { role: "assistant", content: "current reply" },
+    ];
+    session.metadata.lastSavedIndex = 1;
+    state.turnStartIndex.set(buildSessionKey(ctx), messages.length);
+    registerCaptureHook(api, state);
+
+    await Promise.all([
+      handlers.get("before_compaction")?.({ messages }, ctx),
+      handlers.get("agent_end")?.({ messages, success: true }, ctx),
+    ]);
+
+    expect(session.addMessages).toHaveBeenCalledOnce();
+    expect(session.addMessages).toHaveBeenCalledWith([
+      { text: "current user turn", metadata: { openclawMessageId: "run-2", openclawRunId: "run-2" } },
+      { text: "current reply" },
+    ]);
+  });
+
   it("persists the exact ClawTalk user turn after repeated prompt builds without an inbound hook", async () => {
     const { state, session } = createMockState();
     type Handler = (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown;
