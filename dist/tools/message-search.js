@@ -1,5 +1,4 @@
 import { Type } from "@sinclair/typebox";
-import { buildSessionKey } from "../helpers.js";
 export function registerMessageSearchTool(api, state) {
     api.registerTool((toolCtx) => ({
         name: "honcho_search_messages",
@@ -12,10 +11,7 @@ export function registerMessageSearchTool(api, state) {
             from: Type.Optional(Type.Unsafe({
                 type: "string",
                 enum: ["user", "agent", "all"],
-                description: "Filter by sender: 'user' for user messages, 'agent' for this agent's messages, 'all' for everything (default: 'all').",
-            })),
-            about: Type.Optional(Type.String({
-                description: "Sender ID of the participant whose messages to search. Only used when from='user'. Defaults to the last active sender.",
+                description: "Search requester messages by default. Agent and workspace-wide searches require a verified owner.",
             })),
             metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown(), {
                 description: 'Filter by message metadata. Equality: {"key":"value"}. Comparison: {"key":{"gte":5}}. Operators: gte, lte, gt, lt, ne, in, contains, icontains.',
@@ -33,7 +29,10 @@ export function registerMessageSearchTool(api, state) {
             })),
         }, { additionalProperties: false }),
         async execute(_toolCallId, params) {
-            const { query, from = "all", about, metadata, created_after, created_before, limit, } = params;
+            const { query, from = toolCtx.senderIsOwner === true ? "all" : "user", metadata, created_after, created_before, limit, } = params;
+            if (from !== "user" && toolCtx.senderIsOwner !== true) {
+                throw new Error("Broad Honcho search requires a verified owner.");
+            }
             await state.ensureInitialized();
             // Build filters from remaining parameters (metadata, date range)
             const filters = {};
@@ -55,9 +54,7 @@ export function registerMessageSearchTool(api, state) {
             // Route to the appropriate search method based on `from`
             let messages;
             if (from === "user") {
-                const participantPeer = about
-                    ? await state.getParticipantPeer(about)
-                    : await state.resolveSessionParticipantPeer(buildSessionKey({ sessionKey: toolCtx.sessionKey, agentId: toolCtx.agentId }));
+                const participantPeer = await state.resolveToolParticipantPeer(toolCtx);
                 messages = await participantPeer.search(query, searchOpts);
             }
             else if (from === "agent") {

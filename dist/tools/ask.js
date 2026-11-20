@@ -1,5 +1,4 @@
 import { Type } from "@sinclair/typebox";
-import { buildSessionKey } from "../helpers.js";
 export function registerAskTool(api, state) {
     api.registerTool((toolCtx) => ({
         name: "honcho_ask",
@@ -14,17 +13,12 @@ export function registerAskTool(api, state) {
                 enum: ["quick", "thorough"],
                 description: "Reasoning depth: 'quick' for simple facts (default), 'thorough' for synthesis and analysis.",
             })),
-            about: Type.Optional(Type.String({
-                description: "Sender ID of the user to ask about. Defaults to the last active sender. Pass a specific sender_id to ask about a different participant.",
-            })),
         }, { additionalProperties: false }),
         async execute(_toolCallId, params) {
-            const { query, depth = "quick", about } = params;
+            const { query, depth = "quick" } = params;
             await state.ensureInitialized();
             const agentPeer = await state.getAgentPeer(toolCtx.agentId);
-            const participantPeer = about
-                ? await state.getParticipantPeer(about)
-                : await state.resolveSessionParticipantPeer(buildSessionKey({ sessionKey: toolCtx.sessionKey, agentId: toolCtx.agentId }));
+            const participantPeer = await state.resolveToolParticipantPeer(toolCtx);
             const reasoningLevel = depth === "thorough" ? "high" : "low";
             const answer = await agentPeer.chat(query, {
                 target: participantPeer,

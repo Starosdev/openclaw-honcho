@@ -35,12 +35,6 @@ export function registerSessionTool(api: OpenClawPluginApi, state: PluginState):
               maximum: 32000,
             })
           ),
-          about: Type.Optional(
-            Type.String({
-              description:
-                "Sender ID of the user to get session context for. Defaults to the last active sender. Pass a specific sender_id to get session context about a different participant.",
-            })
-          ),
         },
         { additionalProperties: false }
       ),
@@ -50,13 +44,11 @@ export function registerSessionTool(api: OpenClawPluginApi, state: PluginState):
           includeSummary = true,
           searchQuery,
           messageLimit = 4000,
-          about,
         } = params as {
           includeMessages?: boolean;
           includeSummary?: boolean;
           searchQuery?: string;
           messageLimit?: number;
-          about?: string;
         };
 
         await state.ensureInitialized();
@@ -65,16 +57,16 @@ export function registerSessionTool(api: OpenClawPluginApi, state: PluginState):
           sessionKey: toolCtx.sessionKey,
           agentId: toolCtx.agentId,
         });
-        const participantPeer = about
-          ? await state.getParticipantPeer(about)
-          : await state.resolveSessionParticipantPeer(sessionKey);
+        const participantPeer = await state.resolveToolParticipantPeer(toolCtx);
 
         try {
           const session = await state.honcho.session(sessionKey);
 
+          const isOwner = toolCtx.senderIsOwner === true;
           const context = await session.context({
-            summary: includeSummary,
+            summary: includeSummary && isOwner,
             tokens: messageLimit,
+            limitToSession: true,
             peerTarget: participantPeer,
             peerPerspective: agentPeer,
             representationOptions: searchQuery ? { searchQuery } : undefined,
@@ -82,7 +74,7 @@ export function registerSessionTool(api: OpenClawPluginApi, state: PluginState):
 
           const sections: string[] = [];
 
-          if (context.summary?.content) {
+          if (isOwner && includeSummary && context.summary?.content) {
             sections.push(
               `## Earlier Conversation Summary\n\n${context.summary.content}`
             );
@@ -100,8 +92,11 @@ export function registerSessionTool(api: OpenClawPluginApi, state: PluginState):
             );
           }
 
-          if (includeMessages && context.messages.length > 0) {
-            const messageLines = context.messages.map((msg) => {
+          const visible = includeMessages
+            ? context.messages.filter((msg) => isOwner || msg.peerId === participantPeer.id)
+            : [];
+          if (visible.length > 0) {
+            const messageLines = visible.map((msg) => {
               const speaker = state.isParticipantPeerId(msg.peerId) ? "User" : "OpenClaw";
               const timestamp = msg.createdAt
                 ? new Date(msg.createdAt).toLocaleString()
@@ -109,7 +104,7 @@ export function registerSessionTool(api: OpenClawPluginApi, state: PluginState):
               return `**${speaker}**${timestamp ? ` (${timestamp})` : ""}:\n${cleanMessageContent(msg.content as string)}`;
             });
             sections.push(
-              `## Recent Messages (${context.messages.length})\n\n${messageLines.join("\n\n---\n\n")}`
+              `## Recent Messages (${visible.length})\n\n${messageLines.join("\n\n---\n\n")}`
             );
           }
 
@@ -137,8 +132,8 @@ export function registerSessionTool(api: OpenClawPluginApi, state: PluginState):
               },
             ],
             details: {
-              messageCount: context.messages.length,
-              hasSummary: !!context.summary?.content,
+              messageCount: visible.length,
+              hasSummary: isOwner && includeSummary && !!context.summary?.content,
               sessionKey,
             },
           };
