@@ -95,7 +95,7 @@ describe("recall boundaries are applied per path", () => {
     [{}, "workspace fact", undefined],
     [{ automatic: "session" }, "scoped fact", "session"],
     [{ automatic: "scope", scopeName: "client-a" }, "scoped fact", "scope"],
-  ] as const)("keeps subagent recall independent of session creation (%j)", async (recall, fact, boundary) => {
+  ] as const)("uses peer recall for subagent prompts (%j)", async (recall, fact, boundary) => {
     const { state, agentPeer } = mkState(recall);
     const child = { ...ctx, sessionKey: "agent:main:subagent:child" };
     let handler: ((e: unknown, c: unknown) => Promise<unknown>) | undefined;

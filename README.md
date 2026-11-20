@@ -243,9 +243,9 @@ card with session filtering.
 unconditionally upstream. `automatic: "session"` is a true boundary; `ask: "session"`
 is a partial one.
 
-Subagent prompts use peer recall without creating a Honcho session. Session and
-named-scope modes inject only the scoped representation for subagents. Capture
-creates the session when it has messages to write.
+Subagent prompts use peer recall in place of session context. Session and
+named-scope modes inject only the scoped representation for subagents.
+Participant resolution can still look up session metadata before recall.
 
 A path set to `scope` with a missing or blank `scopeName` falls back to `session`
 rather than silently widening.
