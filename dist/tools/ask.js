@@ -18,11 +18,9 @@ export function registerAskTool(api, state) {
         async execute(_toolCallId, params) {
             const { query, depth = "quick" } = params;
             await state.ensureInitialized();
-            const agentPeer = await state.getAgentPeer(toolCtx.agentId);
-            const sessionKey = buildSessionKey({
-                sessionKey: toolCtx.sessionKey,
-                agentId: toolCtx.agentId,
-            });
+            const agentId = toolCtx.agentId ?? state.resolveDefaultAgentId();
+            const agentPeer = await state.getAgentPeer(agentId);
+            const sessionKey = buildSessionKey({ sessionKey: toolCtx.sessionKey, agentId });
             const participantPeer = await state.resolveToolParticipantPeer(toolCtx);
             const reasoningLevel = depth === "thorough" ? "high" : "low";
             // The model decides when to call this, not a person, so it follows the

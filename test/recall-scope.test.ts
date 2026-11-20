@@ -14,7 +14,12 @@ function mkState(recall: Record<string, unknown>) {
     getMetadata: vi.fn(async () => ({})),
     setMetadata: vi.fn(async () => undefined),
   };
-  const agentPeer = { id: "agent-main", chat: vi.fn(async () => "answer") };
+  const agentPeer = {
+    id: "agent-main",
+    chat: vi.fn(async () => "answer"),
+    context: vi.fn(async () => ({ peerCard: ["workspace fact"] })),
+    representation: vi.fn(async () => "scoped fact"),
+  };
   const peer = { id: "owner" };
   const state = {
     cfg: honchoConfigSchema.parse({ baseUrl: "http://x", recall }),
@@ -43,10 +48,15 @@ async function contextArgs(recall: Record<string, unknown>) {
 }
 
 /** Run honcho_ask and return the peer.chat() options. */
-async function askArgs(recall: Record<string, unknown>) {
+async function askArgs(
+  recall: Record<string, unknown>,
+  toolCtx: { sessionKey: string; agentId?: string } = ctx,
+  defaultAgentId = "main",
+) {
   const { state, agentPeer } = mkState(recall);
+  vi.mocked(state.resolveDefaultAgentId).mockReturnValue(defaultAgentId);
   let tool: any;
-  registerAskTool({ registerTool: (factory: any) => { tool = factory(ctx); } } as never, state);
+  registerAskTool({ registerTool: (factory: any) => { tool = factory(toolCtx); } } as never, state);
   await tool.execute("id", { query: "q" });
   return agentPeer.chat.mock.calls[0]?.[1] ?? {};
 }
@@ -63,6 +73,34 @@ describe("recall boundaries are applied per path", () => {
   it("narrows to the session when asked", async () => {
     expect((await contextArgs({ automatic: "session" })).limitToSession).toBe(true);
     expect((await askArgs({ ask: "session" })).session).toBe(buildSessionKey(ctx));
+  });
+
+  it("asks against the capture session when the tool context omits agentId", async () => {
+    const toolCtx = { sessionKey: "agent:vega:discord:dm:u1" };
+    const args = await askArgs({ ask: "session" }, toolCtx, "vega");
+    expect(args.session).toBe(buildSessionKey({ ...toolCtx, agentId: "vega" }));
+  });
+
+  it.each([
+    [{}, "workspace fact", undefined],
+    [{ automatic: "session" }, "scoped fact", "session"],
+    [{ automatic: "scope", scopeName: "client-a" }, "scoped fact", "scope"],
+  ] as const)("keeps subagent recall independent of session creation (%j)", async (recall, fact, boundary) => {
+    const { state, agentPeer } = mkState(recall);
+    const child = { ...ctx, sessionKey: "agent:main:subagent:child" };
+    let handler: ((e: unknown, c: unknown) => Promise<unknown>) | undefined;
+    registerContextHook({ on: (_name: string, fn: never) => { handler = fn; }, logger } as never, state);
+
+    const result = await handler?.({ prompt: "a real prompt", messages: [] }, child);
+
+    expect(result).toEqual({ appendSystemContext: expect.stringContaining(fact) });
+    expect(state.honcho.session).not.toHaveBeenCalled();
+    if (boundary) {
+      expect(agentPeer.context).not.toHaveBeenCalled();
+      expect(agentPeer.representation).toHaveBeenCalledWith(expect.objectContaining(
+        boundary === "session" ? { session: buildSessionKey(child) } : { scope: "client-a" },
+      ));
+    }
   });
 
   it("uses the scope and drops peerPerspective, which the SDK rejects alongside scope", async () => {

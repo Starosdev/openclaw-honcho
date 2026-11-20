@@ -243,6 +243,10 @@ withholds it rather than leak past the boundary.
 unconditionally upstream. `automatic: "session"` is a true boundary; `ask: "session"`
 is a partial one.
 
+Subagent prompts use peer recall without creating a Honcho session. Session and
+named-scope modes inject only the scoped representation for subagents. Capture
+creates the session when it has messages to write.
+
 A path set to `scope` with a missing or blank `scopeName` falls back to `session`
 rather than silently widening.
 

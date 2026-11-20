@@ -1,7 +1,13 @@
 // @ts-ignore - resolved by openclaw runtime
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { PluginState } from "../state.js";
-import { buildSessionKey, extractSenderId, sessionRecallOptions } from "../helpers.js";
+import {
+  buildSessionKey,
+  extractSenderId,
+  isSubagentSession,
+  peerRecallOptions,
+  sessionRecallOptions,
+} from "../helpers.js";
 import { buildDegradedContext, isConnectionFailure } from "../degraded.js";
 
 export function registerContextHook(api: OpenClawPluginApi, state: PluginState): void {
@@ -27,27 +33,41 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
 
       const sections: string[] = [];
 
-      // Don't pass metadata: it replaces persisted metadata on existing
-      // sessions, wiping the capture watermark that flushMessages relies on.
-      // agentId is redundant here — flushMessages writes it on every flush.
-      const session = await state.honcho.session(sessionKey);
-
-      const recall = sessionRecallOptions(
-        state.cfg.recall.automatic,
-        state.cfg.recall.scopeName,
-      );
-
-      let context;
+      const { automatic, scopeName } = state.cfg.recall;
+      let card: string[] | undefined;
+      let representation: string | undefined;
+      let summary: string | undefined;
       try {
-        context = await session.context({
-          summary: true,
-          tokens: 2000,
-          peerTarget: participantPeer,
-          // A scope replaces the perspective peer as the observer, and the
-          // SDK rejects both together.
-          ...(recall.scope ? {} : { peerPerspective: agentPeer }),
-          ...recall,
-        });
+        if (isSubagentSession(ctx)) {
+          // Capture owns subagent sessions. Peer context includes an unscoped
+          // card, so use representation alone when configured to narrow recall.
+          if (automatic === "workspace") {
+            const context = await agentPeer.context({ target: participantPeer });
+            card = context.peerCard;
+            representation = context.representation;
+          } else {
+            representation = await agentPeer.representation({
+              target: participantPeer,
+              ...peerRecallOptions(automatic, scopeName, sessionKey),
+            });
+          }
+        } else {
+          // Honcho replaces session metadata when supplied here. Capture owns
+          // its persisted watermark and session provenance.
+          const session = await state.honcho.session(sessionKey);
+          const recall = sessionRecallOptions(automatic, scopeName);
+          const context = await session.context({
+            summary: true,
+            tokens: 2000,
+            peerTarget: participantPeer,
+            // A scope replaces the perspective peer as the observer.
+            ...(recall.scope ? {} : { peerPerspective: agentPeer }),
+            ...recall,
+          });
+          card = context.peerCard;
+          representation = context.peerRepresentation;
+          summary = context.summary?.content;
+        }
       } catch (e: unknown) {
         const isNotFound =
           e instanceof Error &&
@@ -56,14 +76,14 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
         throw e;
       }
 
-      if (context.peerCard?.length) {
-        sections.push(`Key facts:\n${context.peerCard.map((f) => `• ${f}`).join("\n")}`);
+      if (card?.length) {
+        sections.push(`Key facts:\n${card.map((f) => `• ${f}`).join("\n")}`);
       }
-      if (context.peerRepresentation) {
-        sections.push(`User context:\n${context.peerRepresentation}`);
+      if (representation) {
+        sections.push(`User context:\n${representation}`);
       }
-      if (context.summary?.content) {
-        sections.push(`Earlier in this conversation:\n${context.summary.content}`);
+      if (summary) {
+        sections.push(`Earlier in this conversation:\n${summary}`);
       }
 
       if (sections.length === 0) return;
