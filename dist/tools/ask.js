@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { buildSessionKey } from "../helpers.js";
+import { buildSessionKey, peerRecallOptions } from "../helpers.js";
 export function registerAskTool(api, state) {
     api.registerTool((toolCtx) => ({
         name: "honcho_ask",
@@ -22,13 +22,20 @@ export function registerAskTool(api, state) {
             const { query, depth = "quick", about } = params;
             await state.ensureInitialized();
             const agentPeer = await state.getAgentPeer(toolCtx.agentId);
+            const sessionKey = buildSessionKey({
+                sessionKey: toolCtx.sessionKey,
+                agentId: toolCtx.agentId,
+            });
             const participantPeer = about
                 ? await state.getParticipantPeer(about)
-                : await state.resolveSessionParticipantPeer(buildSessionKey({ sessionKey: toolCtx.sessionKey, agentId: toolCtx.agentId }));
+                : await state.resolveSessionParticipantPeer(sessionKey);
             const reasoningLevel = depth === "thorough" ? "high" : "low";
+            // The model decides when to call this, not a person, so it follows the
+            // `ask` boundary rather than the explicit-tool one.
             const answer = await agentPeer.chat(query, {
                 target: participantPeer,
                 reasoningLevel,
+                ...peerRecallOptions(state.cfg.recall.ask, state.cfg.recall.scopeName, sessionKey),
             });
             return {
                 content: [{ type: "text", text: answer }],

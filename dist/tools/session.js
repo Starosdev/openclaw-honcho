@@ -43,6 +43,10 @@ export function registerSessionTool(api, state) {
                     peerTarget: participantPeer,
                     peerPerspective: agentPeer,
                     representationOptions: searchQuery ? { searchQuery } : undefined,
+                    // This tool is documented as current-session-only. Without this the
+                    // representation it returns spans every session the peer has
+                    // written to, contradicting its own description.
+                    limitToSession: true,
                 });
                 const sections = [];
                 if (context.summary?.content) {
