@@ -91,19 +91,22 @@ export async function flushMessages(
   const lastSavedIndex = Math.min(Math.max(rawLastSavedIndex, 0), messages.length);
   const startIndex = Math.max(turnStartIndex, lastSavedIndex);
   const pending: Array<{ message: unknown; rawIndex: number }> = [];
-  if (clawTalkUserIndex >= 0 && runId) {
+  let alreadyCaptured = false;
+  if (clawTalkUserIndex >= 0 && sourceMessageId && runId) {
     // Snapshot indices can shift between runs. A durable run match also
     // protects retries if the write succeeds before the cursor is saved.
     const existing = await session.messages({
-      filters: { metadata: { openclawMessageId: runId, openclawRunId: runId } },
+      filters: { metadata: { openclawMessageId: sourceMessageId, openclawRunId: runId } },
       size: 1,
     });
-    if (existing.items.length === 0) {
+    alreadyCaptured = existing.items.length > 0;
+    if (!alreadyCaptured && clawTalkUserIndex < startIndex) {
       pending.push({ message: messages[clawTalkUserIndex], rawIndex: clawTalkUserIndex });
     }
   }
   for (let rawIndex = startIndex; rawIndex < messages.length; rawIndex++) {
-    if (rawIndex !== clawTalkUserIndex) pending.push({ message: messages[rawIndex], rawIndex });
+    if (rawIndex === clawTalkUserIndex && alreadyCaptured) continue;
+    pending.push({ message: messages[rawIndex], rawIndex });
   }
   if (pending.length === 0) return 0;
 
