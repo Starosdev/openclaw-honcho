@@ -248,6 +248,28 @@ export function extractSenderId(content) {
     return undefined;
 }
 /**
+ * Recall options for `session.context()`.
+ *
+ * `scope` is mutually exclusive with `peerPerspective` and requires
+ * `peerTarget`, so callers must drop the perspective peer when a scope is
+ * returned — the scope peer becomes the observer instead.
+ */
+export function sessionRecallOptions(scope, scopeName) {
+    if (scope === "session")
+        return { limitToSession: true };
+    if (scope === "scope" && scopeName)
+        return { scope: scopeName };
+    return {};
+}
+/** Recall options for `peer.chat()` and `peer.representation()`. */
+export function peerRecallOptions(scope, scopeName, sessionId) {
+    if (scope === "session")
+        return { session: sessionId };
+    if (scope === "scope" && scopeName)
+        return { scope: scopeName };
+    return {};
+}
+/**
  * Returns true if the message should be dropped entirely.
  * Patterns starting with "/" are treated as anchored regexes (e.g. "/^HEARTBEAT/i").
  * All other patterns match by exact equality or prefix (startsWith).

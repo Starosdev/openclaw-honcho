@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 // @ts-ignore - resolved by openclaw runtime
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import type { PluginState } from "../state.js";
+import { buildSessionKey, peerRecallOptions } from "../helpers.js";
 
 export function registerAskTool(api: OpenClawPluginApi, state: PluginState): void {
   api.registerTool(
@@ -32,13 +33,18 @@ export function registerAskTool(api: OpenClawPluginApi, state: PluginState): voi
         };
 
         await state.ensureInitialized();
-        const agentPeer = await state.getAgentPeer(toolCtx.agentId);
+        const agentId = toolCtx.agentId ?? state.resolveDefaultAgentId();
+        const agentPeer = await state.getAgentPeer(agentId);
+        const sessionKey = buildSessionKey({ sessionKey: toolCtx.sessionKey, agentId });
         const participantPeer = await state.resolveToolParticipantPeer(toolCtx);
 
         const reasoningLevel = depth === "thorough" ? "high" : "low";
+        // The model decides when to call this, not a person, so it follows the
+        // `ask` boundary rather than the explicit-tool one.
         const answer = await agentPeer.chat(query, {
           target: participantPeer,
           reasoningLevel,
+          ...peerRecallOptions(state.cfg.recall.ask, state.cfg.recall.scopeName, sessionKey),
         });
 
         return {

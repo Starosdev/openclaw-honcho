@@ -2,6 +2,7 @@
  * Pure helper functions — no mutable state dependencies.
  */
 import type { Peer, MessageInput } from "@honcho-ai/sdk";
+import type { RecallScope } from "./config.js";
 export type SessionClass = "chat" | "cron" | "subagent" | "thread" | "unknown";
 /**
  * Extract plain text from a message's `content` (string or array of content blocks).
@@ -65,6 +66,22 @@ export declare function cleanMessageContent(content: string): string;
  * metadata blocks from poisoning sender attribution.
  */
 export declare function extractSenderId(content: string): string | undefined;
+/**
+ * Recall options for `session.context()`.
+ *
+ * `scope` is mutually exclusive with `peerPerspective` and requires
+ * `peerTarget`, so callers must drop the perspective peer when a scope is
+ * returned — the scope peer becomes the observer instead.
+ */
+export declare function sessionRecallOptions(scope: RecallScope, scopeName?: string): {
+    limitToSession?: boolean;
+    scope?: string;
+};
+/** Recall options for `peer.chat()` and `peer.representation()`. */
+export declare function peerRecallOptions(scope: RecallScope, scopeName: string | undefined, sessionId: string): {
+    session?: string;
+    scope?: string;
+};
 /**
  * Returns true if the message should be dropped entirely.
  * Patterns starting with "/" are treated as anchored regexes (e.g. "/^HEARTBEAT/i").

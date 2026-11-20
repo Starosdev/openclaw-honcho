@@ -11,6 +11,23 @@ export const DEFAULT_NOISE_PATTERNS = [
 ];
 export const DEFAULT_MEMORY_PROCESS_FILE = "/opt/openclaw/vega-data/vega-memory-process.json";
 /**
+ * How far a recall call may reach.
+ *
+ * - `session`   — this Honcho session only.
+ * - `scope`     — the sessions in `recall.scopeName`, a Honcho scope. Needs a
+ *                 workspace-level API key. A scope with no member sessions
+ *                 returns nothing rather than widening. Not to be confused with
+ *                 a missing or blank `scopeName`, which falls back to `session`
+ *                 below.
+ * - `workspace` — every session the peer has written to.
+ */
+export const RECALL_SCOPES = ["session", "scope", "workspace"];
+function parseRecallScope(value, fallback) {
+    return typeof value === "string" && RECALL_SCOPES.includes(value)
+        ? value
+        : fallback;
+}
+/**
  * Resolve environment variable references in config values.
  * Supports ${ENV_VAR} syntax.
  */
@@ -98,6 +115,23 @@ export const honchoConfigSchema = {
                         ? raw.memoryProcessFile
                         : process.env.WONDER_MEMORY_PROCESS_FILE || DEFAULT_MEMORY_PROCESS_FILE,
                     maxEpisodes,
+                };
+            })(),
+            recall: (() => {
+                const raw = (cfg.recall ?? {});
+                const scopeName = typeof raw.scopeName === "string" && raw.scopeName.trim().length > 0
+                    ? raw.scopeName.trim()
+                    : undefined;
+                const resolve = (value, fallback) => {
+                    const parsed = parseRecallScope(value, fallback);
+                    // "scope" without a name has no boundary to apply. Fall back to the
+                    // session rather than silently widening to the whole workspace.
+                    return parsed === "scope" && !scopeName ? "session" : parsed;
+                };
+                return {
+                    automatic: resolve(raw.automatic, "workspace"),
+                    ask: resolve(raw.ask, "workspace"),
+                    scopeName,
                 };
             })(),
         };
