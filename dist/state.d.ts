@@ -17,6 +17,11 @@ export declare const HONCHO_CLOUD_HOSTNAME = "api.honcho.dev";
  * treated as self-hosted.
  */
 export declare function isManagedHonchoCloud(baseUrl: string): boolean;
+/** Who issued a tool call, as OpenClaw's trusted tool context reports it (never tool args). */
+export type ToolRequester = {
+    requesterSenderId?: string;
+    senderIsOwner?: boolean;
+};
 export type PluginState = {
     honcho: Honcho;
     cfg: HonchoConfig;
@@ -45,6 +50,9 @@ export type PluginState = {
     resolveSessionParticipantPeer: (sessionKey: string) => Promise<Peer>;
     /** Drop cached participant resolution after capture updates session metadata. */
     invalidateSessionParticipantPeer: (sessionKey: string) => void;
+    /** The participant a tool call reads: the requester OpenClaw names in the tool context,
+     * never a model-supplied id. Tools are self-only. */
+    resolveToolParticipantPeer: (requester: ToolRequester) => Promise<Peer>;
     /** Returns true if the given honcho peer ID belongs to a known participant peer. */
     isParticipantPeerId: (peerId: string) => boolean;
     resolveDefaultAgentId: () => string;

@@ -1,5 +1,4 @@
 import { Type } from "@sinclair/typebox";
-import { buildSessionKey } from "../helpers.js";
 import { collectAntiHits, formatAntiHits } from "../antihits.js";
 export function registerSearchTool(api, state) {
     api.registerTool((toolCtx) => ({
@@ -20,16 +19,11 @@ export function registerSearchTool(api, state) {
                 minimum: 0,
                 maximum: 1,
             })),
-            about: Type.Optional(Type.String({
-                description: "Sender ID of the user to query about. Defaults to the last active sender. Pass a specific sender_id to search conclusions about a different participant.",
-            })),
         }, { additionalProperties: false }),
         async execute(_toolCallId, params) {
-            const { query, topK, maxDistance, about } = params;
+            const { query, topK, maxDistance } = params;
             await state.ensureInitialized();
-            const participantPeer = about
-                ? await state.getParticipantPeer(about)
-                : await state.resolveSessionParticipantPeer(buildSessionKey({ sessionKey: toolCtx.sessionKey, agentId: toolCtx.agentId }));
+            const participantPeer = await state.resolveToolParticipantPeer(toolCtx);
             const resolvedTopK = topK ?? 10;
             const resolvedMaxDistance = maxDistance ?? 0.5;
             const representation = await participantPeer.representation({

@@ -1,5 +1,4 @@
 import { Type } from "@sinclair/typebox";
-import { buildSessionKey } from "../helpers.js";
 export function registerContextTool(api, state) {
     api.registerTool((toolCtx) => ({
         name: "honcho_context",
@@ -11,16 +10,11 @@ export function registerContextTool(api, state) {
                 enum: ["card", "full"],
                 description: "Detail level: 'card' for key facts (default, fast), 'full' for broad representation.",
             })),
-            about: Type.Optional(Type.String({
-                description: "Sender ID of the user to query about. Defaults to the last active sender. Pass a specific sender_id to get context about a different participant.",
-            })),
         }, { additionalProperties: false }),
         async execute(_toolCallId, params) {
-            const { detail = "card", about } = params;
+            const { detail = "card" } = params;
             await state.ensureInitialized();
-            const participantPeer = about
-                ? await state.getParticipantPeer(about)
-                : await state.resolveSessionParticipantPeer(buildSessionKey({ sessionKey: toolCtx.sessionKey, agentId: toolCtx.agentId }));
+            const participantPeer = await state.resolveToolParticipantPeer(toolCtx);
             if (detail === "card") {
                 const card = await participantPeer.card().catch((err) => {
                     // Only treat NotFoundError as empty; re-throw others or log

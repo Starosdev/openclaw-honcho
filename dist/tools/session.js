@@ -20,32 +20,29 @@ export function registerSessionTool(api, state) {
                 minimum: 100,
                 maximum: 32000,
             })),
-            about: Type.Optional(Type.String({
-                description: "Sender ID of the user to get session context for. Defaults to the last active sender. Pass a specific sender_id to get session context about a different participant.",
-            })),
         }, { additionalProperties: false }),
         async execute(_toolCallId, params) {
-            const { includeMessages = true, includeSummary = true, searchQuery, messageLimit = 4000, about, } = params;
+            const { includeMessages = true, includeSummary = true, searchQuery, messageLimit = 4000, } = params;
             await state.ensureInitialized();
             const agentPeer = await state.getAgentPeer(toolCtx.agentId);
             const sessionKey = buildSessionKey({
                 sessionKey: toolCtx.sessionKey,
                 agentId: toolCtx.agentId,
             });
-            const participantPeer = about
-                ? await state.getParticipantPeer(about)
-                : await state.resolveSessionParticipantPeer(sessionKey);
+            const participantPeer = await state.resolveToolParticipantPeer(toolCtx);
             try {
                 const session = await state.honcho.session(sessionKey);
+                const isOwner = toolCtx.senderIsOwner === true;
                 const context = await session.context({
-                    summary: includeSummary,
+                    summary: includeSummary && isOwner,
                     tokens: messageLimit,
+                    limitToSession: true,
                     peerTarget: participantPeer,
                     peerPerspective: agentPeer,
                     representationOptions: searchQuery ? { searchQuery } : undefined,
                 });
                 const sections = [];
-                if (context.summary?.content) {
+                if (isOwner && includeSummary && context.summary?.content) {
                     sections.push(`## Earlier Conversation Summary\n\n${context.summary.content}`);
                 }
                 if (context.peerCard?.length) {
@@ -54,15 +51,18 @@ export function registerSessionTool(api, state) {
                 if (context.peerRepresentation) {
                     sections.push(`## User Context\n\n${context.peerRepresentation}`);
                 }
-                if (includeMessages && context.messages.length > 0) {
-                    const messageLines = context.messages.map((msg) => {
+                const visible = includeMessages
+                    ? context.messages.filter((msg) => isOwner || msg.peerId === participantPeer.id)
+                    : [];
+                if (visible.length > 0) {
+                    const messageLines = visible.map((msg) => {
                         const speaker = state.isParticipantPeerId(msg.peerId) ? "User" : "OpenClaw";
                         const timestamp = msg.createdAt
                             ? new Date(msg.createdAt).toLocaleString()
                             : "";
                         return `**${speaker}**${timestamp ? ` (${timestamp})` : ""}:\n${cleanMessageContent(msg.content)}`;
                     });
-                    sections.push(`## Recent Messages (${context.messages.length})\n\n${messageLines.join("\n\n---\n\n")}`);
+                    sections.push(`## Recent Messages (${visible.length})\n\n${messageLines.join("\n\n---\n\n")}`);
                 }
                 if (sections.length === 0) {
                     return {
@@ -86,8 +86,8 @@ export function registerSessionTool(api, state) {
                         },
                     ],
                     details: {
-                        messageCount: context.messages.length,
-                        hasSummary: !!context.summary?.content,
+                        messageCount: visible.length,
+                        hasSummary: isOwner && includeSummary && !!context.summary?.content,
                         sessionKey,
                     },
                 };
