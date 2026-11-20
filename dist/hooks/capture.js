@@ -57,14 +57,28 @@ export async function flushMessages(api, state, messages, ctx) {
     const rawLastSavedIndex = typeof existingMeta.lastSavedIndex === "number" ? existingMeta.lastSavedIndex : 0;
     const lastSavedIndex = Math.min(Math.max(rawLastSavedIndex, 0), messages.length);
     const startIndex = Math.max(turnStartIndex, lastSavedIndex);
-    if (messages.length <= startIndex) {
-        return 0;
+    const pending = [];
+    if (clawTalkUserIndex >= 0 && runId) {
+        // Snapshot indices can shift between runs. A durable run match also
+        // protects retries if the write succeeds before the cursor is saved.
+        const existing = await session.messages({
+            filters: { metadata: { openclawMessageId: runId, openclawRunId: runId } },
+            size: 1,
+        });
+        if (existing.items.length === 0) {
+            pending.push({ message: messages[clawTalkUserIndex], rawIndex: clawTalkUserIndex });
+        }
     }
-    const newRawMessages = messages.slice(startIndex);
+    for (let rawIndex = startIndex; rawIndex < messages.length; rawIndex++) {
+        if (rawIndex !== clawTalkUserIndex)
+            pending.push({ message: messages[rawIndex], rawIndex });
+    }
+    if (pending.length === 0)
+        return 0;
     let lastUserOffset = -1;
     let lastAssistantOffset = -1;
-    for (let offset = 0; offset < newRawMessages.length; offset++) {
-        const message = newRawMessages[offset];
+    for (let offset = 0; offset < pending.length; offset++) {
+        const { message } = pending[offset];
         if (!message || typeof message !== "object")
             continue;
         const role = message.role;
@@ -77,7 +91,7 @@ export async function flushMessages(api, state, messages, ctx) {
     const senderIds = new Set();
     let lastSenderId;
     let userMsgCount = 0;
-    for (const msg of newRawMessages) {
+    for (const { message: msg } of pending) {
         if (!msg || typeof msg !== "object")
             continue;
         const m = msg;
@@ -123,11 +137,12 @@ export async function flushMessages(api, state, messages, ctx) {
     const peerConfigs = Array.from(peerConfigMap.entries());
     await session.addPeers(peerConfigs);
     const extracted = [];
-    for (let offset = 0; offset < newRawMessages.length; offset++) {
+    for (let offset = 0; offset < pending.length; offset++) {
+        const { message: rawMessage, rawIndex } = pending[offset];
         const isSourceUser = clawTalkUserIndex >= 0
-            ? startIndex + offset === clawTalkUserIndex
+            ? rawIndex === clawTalkUserIndex
             : offset === lastUserOffset;
-        const [message] = extractMessages([newRawMessages[offset]], defaultParticipantPeer, agentPeer, state.cfg.noisePatterns, (senderId) => resolvedPeers.get(senderId), isSourceUser && sourceMessageId
+        const [message] = extractMessages([rawMessage], defaultParticipantPeer, agentPeer, state.cfg.noisePatterns, (senderId) => resolvedPeers.get(senderId), isSourceUser && sourceMessageId
             ? {
                 openclawMessageId: sourceMessageId,
                 ...(ctx.runId ? { openclawRunId: ctx.runId } : {}),
@@ -136,7 +151,7 @@ export async function flushMessages(api, state, messages, ctx) {
                 ? { openclawRunId: ctx.runId }
                 : undefined);
         if (message)
-            extracted.push({ message, rawIndex: startIndex + offset });
+            extracted.push({ message, rawIndex });
     }
     // participantSenderId = last active sender, used by tools to resolve the
     // session's current participant peer. Named "sender" (not "peer") to
@@ -164,7 +179,7 @@ export async function flushMessages(api, state, messages, ctx) {
         const isLastChunk = i + addMessagesLimit >= extracted.length;
         const lastSavedIndex = isLastChunk
             ? messages.length
-            : chunk[chunk.length - 1].rawIndex + 1;
+            : Math.max(startIndex, chunk[chunk.length - 1].rawIndex + 1);
         await session.setMetadata({ ...updatedMeta, lastSavedIndex });
     }
     state.invalidateSessionParticipantPeer?.(sessionKey);
@@ -173,11 +188,21 @@ export async function flushMessages(api, state, messages, ctx) {
 export function registerCaptureHook(api, state) {
     const sourceMessageIdsByRun = new Map();
     const pendingSourceMessageIdsBySession = new Map();
+    const flushesBySession = new Map();
     // Compaction and reset can advance lastSavedIndex before agent_end runs.
-    const flushCapturedMessages = (messages, ctx) => flushMessages(api, state, messages, {
-        ...ctx,
-        sourceMessageId: ctx.runId ? sourceMessageIdsByRun.get(ctx.runId) : undefined,
-    });
+    const flushCapturedMessages = (messages, ctx) => {
+        const sourceMessageId = ctx.runId ? sourceMessageIdsByRun.get(ctx.runId) : undefined;
+        const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
+        const sessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId });
+        const previous = flushesBySession.get(sessionKey);
+        // Detached agent_end and compaction hooks can overlap on the same cursor.
+        const current = Promise.resolve(previous).catch(() => undefined).then(() => flushMessages(api, state, messages, { ...ctx, agentId, sourceMessageId }));
+        flushesBySession.set(sessionKey, current);
+        return current.finally(() => {
+            if (flushesBySession.get(sessionKey) === current)
+                flushesBySession.delete(sessionKey);
+        });
+    };
     api.on("message_received", (event, ctx) => {
         const runId = event.runId ?? ctx.runId;
         const messageId = event.messageId ?? ctx.messageId;
