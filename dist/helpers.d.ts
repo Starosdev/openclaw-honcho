@@ -10,6 +10,7 @@ export type SessionClass = "chat" | "cron" | "subagent" | "thread" | "unknown";
  */
 export declare function getRawContent(msg: unknown): string;
 export declare function normalizeSessionKey(raw?: string): string;
+export declare function isClawTalkSession(sessionKey?: string): boolean;
 /**
  * Classify a normalized OpenClaw sessionKey into one of the persistence
  * categories tracked in Honcho session metadata. Cron and subagent

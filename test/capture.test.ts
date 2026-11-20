@@ -67,6 +67,12 @@ function createMockState(): { state: PluginState; session: SessionStub; ownerPee
     ensureInitialized: vi.fn(async () => undefined),
     getAgentPeer: vi.fn(async () => agentPeer),
     getParticipantPeer: vi.fn(async () => ownerPeer),
+    getClawTalkParticipantPeer: vi.fn(async (senderId: string) => ({
+      id: `clawtalk-${senderId}`,
+      message: vi.fn((text: string, options?: { metadata?: CapturedMeta }) => ({
+        text, peer_id: `clawtalk-${senderId}`, ...options,
+      })),
+    })),
     resolveDefaultAgentId: vi.fn(() => "main"),
   } as unknown as PluginState;
 
@@ -196,7 +202,8 @@ describe("registerCaptureHook source IDs", () => {
       logger: loggerStub(),
       on: (name: string, handler: Handler) => handlers.set(name, handler),
     } as never;
-    const ctx = { agentId: "main", sessionKey: "agent:main:clawtalk-user:device:abc", runId: "run-2" };
+    const senderId = `gateway-device-${"a".repeat(64)}`;
+    const ctx = { agentId: "main", sessionKey: "agent:main:clawtalk-user:device:abc", runId: "run-2", senderId };
     const messages = [
       { role: "user", content: "current user turn", idempotencyKey: "run-2:user" },
       { role: "assistant", content: "current reply" },
@@ -212,9 +219,11 @@ describe("registerCaptureHook source IDs", () => {
 
     expect(session.addMessages).toHaveBeenCalledOnce();
     expect(session.addMessages).toHaveBeenCalledWith([
-      { text: "current user turn", metadata: { openclawMessageId: "run-2", openclawRunId: "run-2" } },
+      { text: "current user turn", peer_id: `clawtalk-${senderId}`,
+        metadata: { openclawMessageId: "run-2", openclawRunId: "run-2" } },
       { text: "current reply" },
     ]);
+    expect(session.metadata.participantSenderId).toBe(senderId);
   });
 
   it("persists the exact ClawTalk user turn after repeated prompt builds without an inbound hook", async () => {
@@ -225,7 +234,7 @@ describe("registerCaptureHook source IDs", () => {
       logger: loggerStub(),
       on: (name: string, handler: Handler) => handlers.set(name, handler),
     } as never;
-    const ctx = { agentId: "main", sessionKey: "agent:main:clawtalk-user:device:abc", runId: "run-2" };
+    const ctx = { agentId: "main", sessionKey: "agent:main:clawtalk-user:device:abc", runId: "run-2", senderId: `gateway-device-${"a".repeat(64)}` };
     const messages = [
       { role: "user", content: "old turn", idempotencyKey: "run-1:user" },
       { role: "assistant", content: "old reply" },
@@ -236,7 +245,8 @@ describe("registerCaptureHook source IDs", () => {
     state.turnStartIndex.set(buildSessionKey(ctx), messages.length);
     await handlers.get("agent_end")?.({ messages, success: true }, ctx);
     expect(session.addMessages).toHaveBeenCalledWith([
-      { text: "new turn", metadata: { openclawMessageId: "run-2", openclawRunId: "run-2" } },
+      { text: "new turn", peer_id: `clawtalk-${ctx.senderId}`,
+        metadata: { openclawMessageId: "run-2", openclawRunId: "run-2" } },
       { text: "new reply" },
     ]);
     await handlers.get("agent_end")?.({ messages, success: true }, ctx);

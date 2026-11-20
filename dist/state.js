@@ -5,6 +5,7 @@
  */
 import { Honcho } from "@honcho-ai/sdk";
 import { honchoConfigSchema } from "./config.js";
+import { isClawTalkSession } from "./helpers.js";
 import { PeersPersister, loadPeersFileSync, resolvePeersFilePath, resolveParticipantPeerId, } from "./peers.js";
 export const OWNER_ID = "owner";
 export const LEGACY_PEER_ID = "openclaw";
@@ -55,6 +56,7 @@ export function createPluginState(api) {
         ensureInitialized,
         getAgentPeer,
         getParticipantPeer,
+        getClawTalkParticipantPeer,
         resolveSessionParticipantPeer,
         invalidateSessionParticipantPeer,
         resolveToolParticipantPeer,
@@ -119,6 +121,9 @@ export function createPluginState(api) {
             return peer;
         const wasInFile = channelPeerId in peersPersister.peers;
         const resolvedPeerId = resolveParticipantPeerId(channelPeerId, peersPersister, OWNER_ID);
+        if (/^clawtalk-gateway-device-[a-f0-9]{64}$/.test(resolvedPeerId)) {
+            throw new Error("ClawTalk device peers require an authenticated device context.");
+        }
         const autoSeeded = !wasInFile && resolvedPeerId !== OWNER_ID;
         if (resolvedPeerId === OWNER_ID) {
             peer = await ensureOwnerPeer();
@@ -132,6 +137,19 @@ export function createPluginState(api) {
         state.participantPeers.set(channelPeerId, peer);
         return peer;
     }
+    async function getClawTalkParticipantPeer(senderId) {
+        if (!senderId || !/^gateway-device-[a-f0-9]{64}$/.test(senderId)) {
+            throw new Error("Honcho requires a verified ClawTalk device.");
+        }
+        // Dedicated peer namespace bypasses legacy unknown-sender owner mapping.
+        const peerId = `clawtalk-${senderId}`;
+        const cached = state.participantPeers.get(peerId);
+        if (cached)
+            return cached;
+        const peer = await honcho.peer(peerId);
+        state.participantPeers.set(peerId, peer);
+        return peer;
+    }
     async function resolveSessionParticipantPeer(sessionKey) {
         const cached = sessionParticipantPeerCache.get(sessionKey);
         if (cached)
@@ -140,7 +158,10 @@ export function createPluginState(api) {
             const session = await honcho.session(sessionKey);
             const meta = await session.getMetadata();
             if (meta && typeof meta === "object") {
-                const senderId = meta.participantSenderId;
+                const { participantSenderId: senderId, openclawSessionKey } = meta;
+                if (typeof openclawSessionKey === "string" && isClawTalkSession(openclawSessionKey)) {
+                    return await getClawTalkParticipantPeer(typeof senderId === "string" ? senderId : undefined);
+                }
                 if (typeof senderId === "string" && senderId.length > 0) {
                     return await getParticipantPeer(senderId);
                 }
@@ -166,6 +187,8 @@ export function createPluginState(api) {
         // session is often not the person asking. The tool context names the
         // requester for this run, the same sender capture will attribute it to.
         const senderId = requester.requesterSenderId?.trim();
+        if (isClawTalkSession(requester.sessionKey))
+            return getClawTalkParticipantPeer(senderId);
         if (senderId) {
             const peer = await getParticipantPeer(senderId);
             if (peer.id !== OWNER_ID || requester.senderIsOwner === true)

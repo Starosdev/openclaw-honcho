@@ -33,7 +33,7 @@ function makePeer(id: string) {
 }
 
 /** A group where Bob (222) spoke last, so session metadata names him. */
-function setup() {
+function setup(defaultUnknownPolicy: "per-sender" | "owner" = "per-sender") {
   const peers = new Map([makePeer("111"), makePeer("222")].map((p) => [p.id, p]));
   const session = {
     getMetadata: vi.fn(async () => ({ participantSenderId: "222" })),
@@ -60,7 +60,7 @@ function setup() {
   };
   writeFileSync(
     process.env.OPENCLAW_HONCHO_PEERS_FILE!,
-    JSON.stringify({ version: 1, defaultUnknownPolicy: "per-sender", peers: { "111": "111", "222": "222" } }),
+    JSON.stringify({ version: 1, defaultUnknownPolicy, peers: { "111": "111", "222": "222" } }),
   );
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const state = createPluginState({ pluginConfig: { baseUrl: "http://x" }, logger, config: {} } as never);
@@ -87,6 +87,24 @@ afterEach(() => {
 });
 
 describe("tools read the requester's own memory", () => {
+  it("resolves distinct ClawTalk device peers even with the legacy owner fallback configured", async () => {
+    const { state, peers } = setup("owner");
+    await state.ensureInitialized();
+    const ctx = { sessionKey: "agent:main:clawtalk-user:test" };
+    const first = `gateway-device-${"a".repeat(64)}`;
+    const second = `gateway-device-${"b".repeat(64)}`;
+    await tool(registerMessageSearchTool, state, { ...ctx, requesterSenderId: first })
+      .execute("first", { query: "q" });
+    expect(peers.get(`clawtalk-${first}`)?.search).toHaveBeenCalledOnce();
+    await tool(registerMessageSearchTool, state, { ...ctx, requesterSenderId: second })
+      .execute("second", { query: "q" });
+    expect(peers.get(`clawtalk-${first}`)?.search).toHaveBeenCalledOnce();
+    expect(peers.get(`clawtalk-${second}`)?.search).toHaveBeenCalledOnce();
+    expect(peers.get("owner")?.search).not.toHaveBeenCalled();
+    await expect(tool(registerMessageSearchTool, state, { ...ctx, requesterSenderId: "openclaw-ios" })
+      .execute("unknown", { query: "q" })).rejects.toThrow("verified ClawTalk device");
+  });
+
   it("every tool targets the sender of the current message, not whoever spoke last", async () => {
     const { state, session, peers } = setup();
     const aliceTurn = { sessionKey: GROUP_KEY, agentId: "main", requesterSenderId: "111" };
