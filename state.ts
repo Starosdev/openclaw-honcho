@@ -18,6 +18,7 @@ import {
 
 export const OWNER_ID = "owner";
 export const LEGACY_PEER_ID = "openclaw";
+const CLAWTALK_PEER_ID = /^clawtalk-gateway-device-[a-f0-9]{64}$/;
 
 export const HONCHO_CLOUD_HOSTNAME = "api.honcho.dev";
 
@@ -181,6 +182,9 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
 
   async function getParticipantPeer(channelPeerId?: string): Promise<Peer> {
     if (!channelPeerId) return ensureOwnerPeer();
+    if (CLAWTALK_PEER_ID.test(channelPeerId) || CLAWTALK_PEER_ID.test(peersPersister.peers[channelPeerId] ?? "")) {
+      throw new Error("ClawTalk device peers require an authenticated device context.");
+    }
 
     // Known senders resolve via the peers file. Unknown senders auto-seed
     // per the persister's defaultUnknownPolicy: legacy installs merge into
@@ -190,7 +194,7 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
 
     const wasInFile = channelPeerId in peersPersister.peers;
     const resolvedPeerId = resolveParticipantPeerId(channelPeerId, peersPersister, OWNER_ID);
-    if (/^clawtalk-gateway-device-[a-f0-9]{64}$/.test(resolvedPeerId)) {
+    if (CLAWTALK_PEER_ID.test(resolvedPeerId)) {
       throw new Error("ClawTalk device peers require an authenticated device context.");
     }
     const autoSeeded = !wasInFile && resolvedPeerId !== OWNER_ID;

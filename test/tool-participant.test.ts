@@ -101,6 +101,8 @@ describe("tools read the requester's own memory", () => {
     expect(peers.get(`clawtalk-${first}`)?.search).toHaveBeenCalledOnce();
     expect(peers.get(`clawtalk-${second}`)?.search).toHaveBeenCalledOnce();
     expect(peers.get("owner")?.search).not.toHaveBeenCalled();
+    await expect(state.getParticipantPeer(`clawtalk-${first}`))
+      .rejects.toThrow("authenticated device context");
     await expect(tool(registerMessageSearchTool, state, { ...ctx, requesterSenderId: "openclaw-ios" })
       .execute("unknown", { query: "q" })).rejects.toThrow("verified ClawTalk device");
   });
