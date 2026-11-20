@@ -19,6 +19,7 @@ export declare const HONCHO_CLOUD_HOSTNAME = "api.honcho.dev";
 export declare function isManagedHonchoCloud(baseUrl: string): boolean;
 /** Who issued a tool call, as OpenClaw's trusted tool context reports it (never tool args). */
 export type ToolRequester = {
+    sessionKey?: string;
     requesterSenderId?: string;
     senderIsOwner?: boolean;
 };
@@ -45,6 +46,7 @@ export type PluginState = {
     peersPersister: PeersPersister;
     /** Resolve a participant peer by channel peer ID. Returns default "owner" peer if no ID given. */
     getParticipantPeer: (channelPeerId?: string) => Promise<Peer>;
+    getClawTalkParticipantPeer: (senderId?: string) => Promise<Peer>;
     /** Resolve the participant peer for a session by reading participantSenderId from session metadata.
      * Falls back to default "owner" peer if no metadata found. */
     resolveSessionParticipantPeer: (sessionKey: string) => Promise<Peer>;

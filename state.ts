@@ -8,6 +8,7 @@ import { Honcho, type Peer } from "@honcho-ai/sdk";
 // @ts-ignore - resolved by openclaw runtime
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { honchoConfigSchema, type HonchoConfig } from "./config.js";
+import { isClawTalkSession } from "./helpers.js";
 import {
   PeersPersister,
   loadPeersFileSync,
@@ -17,6 +18,7 @@ import {
 
 export const OWNER_ID = "owner";
 export const LEGACY_PEER_ID = "openclaw";
+const CLAWTALK_PEER_ID = /^clawtalk-gateway-device-[a-f0-9]{64}$/;
 
 export const HONCHO_CLOUD_HOSTNAME = "api.honcho.dev";
 
@@ -36,6 +38,7 @@ export function isManagedHonchoCloud(baseUrl: string): boolean {
 
 /** Who issued a tool call, as OpenClaw's trusted tool context reports it (never tool args). */
 export type ToolRequester = {
+  sessionKey?: string;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
 };
@@ -63,6 +66,7 @@ export type PluginState = {
   peersPersister: PeersPersister;
   /** Resolve a participant peer by channel peer ID. Returns default "owner" peer if no ID given. */
   getParticipantPeer: (channelPeerId?: string) => Promise<Peer>;
+  getClawTalkParticipantPeer: (senderId?: string) => Promise<Peer>;
   /** Resolve the participant peer for a session by reading participantSenderId from session metadata.
    * Falls back to default "owner" peer if no metadata found. */
   resolveSessionParticipantPeer: (sessionKey: string) => Promise<Peer>;
@@ -119,6 +123,7 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
     ensureInitialized,
     getAgentPeer,
     getParticipantPeer,
+    getClawTalkParticipantPeer,
     resolveSessionParticipantPeer,
     invalidateSessionParticipantPeer,
     resolveToolParticipantPeer,
@@ -177,6 +182,9 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
 
   async function getParticipantPeer(channelPeerId?: string): Promise<Peer> {
     if (!channelPeerId) return ensureOwnerPeer();
+    if (CLAWTALK_PEER_ID.test(channelPeerId) || CLAWTALK_PEER_ID.test(peersPersister.peers[channelPeerId] ?? "")) {
+      throw new Error("ClawTalk device peers require an authenticated device context.");
+    }
 
     // Known senders resolve via the peers file. Unknown senders auto-seed
     // per the persister's defaultUnknownPolicy: legacy installs merge into
@@ -186,6 +194,9 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
 
     const wasInFile = channelPeerId in peersPersister.peers;
     const resolvedPeerId = resolveParticipantPeerId(channelPeerId, peersPersister, OWNER_ID);
+    if (CLAWTALK_PEER_ID.test(resolvedPeerId)) {
+      throw new Error("ClawTalk device peers require an authenticated device context.");
+    }
     const autoSeeded = !wasInFile && resolvedPeerId !== OWNER_ID;
 
     if (resolvedPeerId === OWNER_ID) {
@@ -199,6 +210,19 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
     return peer;
   }
 
+  async function getClawTalkParticipantPeer(senderId?: string): Promise<Peer> {
+    if (!senderId || !/^gateway-device-[a-f0-9]{64}$/.test(senderId)) {
+      throw new Error("Honcho requires a verified ClawTalk device.");
+    }
+    // Dedicated peer namespace bypasses legacy unknown-sender owner mapping.
+    const peerId = `clawtalk-${senderId}`;
+    const cached = state.participantPeers.get(peerId);
+    if (cached) return cached;
+    const peer = await honcho.peer(peerId);
+    state.participantPeers.set(peerId, peer);
+    return peer;
+  }
+
   async function resolveSessionParticipantPeer(sessionKey: string): Promise<Peer> {
     const cached = sessionParticipantPeerCache.get(sessionKey);
     if (cached) return cached;
@@ -207,7 +231,10 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
       const session = await honcho.session(sessionKey);
       const meta = await session.getMetadata();
       if (meta && typeof meta === "object") {
-        const senderId = (meta as Record<string, unknown>).participantSenderId;
+        const { participantSenderId: senderId, openclawSessionKey } = meta as Record<string, unknown>;
+        if (typeof openclawSessionKey === "string" && isClawTalkSession(openclawSessionKey)) {
+          return await getClawTalkParticipantPeer(typeof senderId === "string" ? senderId : undefined);
+        }
         if (typeof senderId === "string" && senderId.length > 0) {
           return await getParticipantPeer(senderId);
         }
@@ -235,6 +262,7 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
     // session is often not the person asking. The tool context names the
     // requester for this run, the same sender capture will attribute it to.
     const senderId = requester.requesterSenderId?.trim();
+    if (isClawTalkSession(requester.sessionKey)) return getClawTalkParticipantPeer(senderId);
     if (senderId) {
       const peer = await getParticipantPeer(senderId);
       if (peer.id !== OWNER_ID || requester.senderIsOwner === true) return peer;

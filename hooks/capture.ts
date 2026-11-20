@@ -5,6 +5,7 @@ import { OWNER_ID } from "../state.js";
 import {
   buildSessionKey,
   classifySession,
+  isClawTalkSession,
   isSubagentSession,
   normalizeSessionKey,
   extractMessages,
@@ -29,6 +30,7 @@ export async function flushMessages(
     messageProvider?: string;
     runId?: string;
     sourceMessageId?: string;
+    senderId?: string;
   },
 ): Promise<number> {
   if (!messages?.length) return 0;
@@ -74,8 +76,9 @@ export async function flushMessages(
   // entry with a run-scoped idempotency key. Prompt rebuilds may already
   // include this entry, and the inbound hook may have run elsewhere.
   const runId = ctx.runId;
+  const isClawTalk = isClawTalkSession(openclawSessionKey);
   const clawTalkUserIndex =
-    runId && /^agent:[^:]+:clawtalk-user:/.test(openclawSessionKey)
+    runId && isClawTalk
       ? messages.findIndex((message) => {
           const entry = message as { role?: string; idempotencyKey?: string } | undefined;
           return entry?.role === "user" && entry.idempotencyKey === `${runId}:user`;
@@ -109,6 +112,9 @@ export async function flushMessages(
     pending.push({ message: messages[rawIndex], rawIndex });
   }
   if (pending.length === 0) return 0;
+  const clawTalkPeer = clawTalkUserIndex >= 0 && ctx.senderId
+    ? await state.getClawTalkParticipantPeer(ctx.senderId)
+    : undefined;
 
   let lastUserOffset = -1;
   let lastAssistantOffset = -1;
@@ -122,12 +128,13 @@ export async function flushMessages(
 
   // Pre-resolve participant peers for all unique sender IDs in this batch
   const senderIds = new Set<string>();
-  let lastSenderId: string | undefined;
+  let lastSenderId = clawTalkPeer ? ctx.senderId : undefined;
   let userMsgCount = 0;
   for (const { message: msg } of pending) {
     if (!msg || typeof msg !== "object") continue;
     const m = msg as Record<string, unknown>;
     if (m.role !== "user") continue;
+    if (isClawTalk) continue;
     userMsgCount++;
     const rawContent = getRawContent(msg);
     const senderId = extractSenderId(rawContent);
@@ -151,11 +158,16 @@ export async function flushMessages(
     resolvedPeers.set(senderIdArray[i], peers[i]);
   }
 
-  const defaultParticipantPeer = await state.getParticipantPeer();
+  const defaultParticipantPeer = clawTalkPeer ?? (isClawTalk ? agentPeer : await state.getParticipantPeer());
 
   // Build peer configs: default owner + all resolved participant peers + agent + parent
   const peerConfigMap = new Map<string, { observeMe: boolean; observeOthers: boolean }>();
-  peerConfigMap.set(OWNER_ID, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
+  if (!isClawTalk) {
+    peerConfigMap.set(OWNER_ID, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
+  }
+  if (clawTalkPeer) {
+    peerConfigMap.set(clawTalkPeer.id, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
+  }
   for (const [, peer] of resolvedPeers) {
     if (peer.id !== OWNER_ID) {
       peerConfigMap.set(peer.id, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
@@ -182,12 +194,14 @@ export async function flushMessages(
     const isSourceUser = clawTalkUserIndex >= 0
       ? rawIndex === clawTalkUserIndex
       : offset === lastUserOffset;
+    const isClawTalkUser = isClawTalk && (rawMessage as { role?: unknown } | undefined)?.role === "user";
+    if (isClawTalkUser && (rawIndex !== clawTalkUserIndex || !clawTalkPeer)) continue;
     const [message] = extractMessages(
       [rawMessage],
       defaultParticipantPeer,
       agentPeer,
       state.cfg.noisePatterns,
-      (senderId) => resolvedPeers.get(senderId),
+      (senderId) => isClawTalkUser ? undefined : resolvedPeers.get(senderId),
       isSourceUser && sourceMessageId
         ? {
             openclawMessageId: sourceMessageId,
@@ -248,6 +262,7 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
       sessionId?: string;
       messageProvider?: string;
       runId?: string;
+      senderId?: string;
     },
   ) => {
     const sourceMessageId = ctx.runId ? sourceMessageIdsByRun.get(ctx.runId) : undefined;

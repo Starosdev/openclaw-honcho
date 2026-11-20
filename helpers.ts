@@ -39,6 +39,10 @@ export function normalizeSessionKey(raw?: string): string {
   return (raw ?? "default").trim() || "default";
 }
 
+export function isClawTalkSession(sessionKey?: string): boolean {
+  return /^agent:[^:]+:clawtalk-user:/.test(normalizeSessionKey(sessionKey));
+}
+
 /**
  * Mirrors upstream OpenClaw's parseThreadSessionSuffix detection — looks for a
  * `:thread:` segment anywhere after the routing prefix. Kept inline because the

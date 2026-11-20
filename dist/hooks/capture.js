@@ -1,5 +1,5 @@
 import { OWNER_ID } from "../state.js";
-import { buildSessionKey, classifySession, isSubagentSession, normalizeSessionKey, extractMessages, extractSenderId, getRawContent, } from "../helpers.js";
+import { buildSessionKey, classifySession, isClawTalkSession, isSubagentSession, normalizeSessionKey, extractMessages, extractSenderId, getRawContent, } from "../helpers.js";
 import { subagentParentMap } from "./subagent.js";
 /**
  * Core message capture logic shared by agent_end, before_compaction, and before_reset.
@@ -44,7 +44,8 @@ export async function flushMessages(api, state, messages, ctx) {
     // entry with a run-scoped idempotency key. Prompt rebuilds may already
     // include this entry, and the inbound hook may have run elsewhere.
     const runId = ctx.runId;
-    const clawTalkUserIndex = runId && /^agent:[^:]+:clawtalk-user:/.test(openclawSessionKey)
+    const isClawTalk = isClawTalkSession(openclawSessionKey);
+    const clawTalkUserIndex = runId && isClawTalk
         ? messages.findIndex((message) => {
             const entry = message;
             return entry?.role === "user" && entry.idempotencyKey === `${runId}:user`;
@@ -78,6 +79,9 @@ export async function flushMessages(api, state, messages, ctx) {
     }
     if (pending.length === 0)
         return 0;
+    const clawTalkPeer = clawTalkUserIndex >= 0 && ctx.senderId
+        ? await state.getClawTalkParticipantPeer(ctx.senderId)
+        : undefined;
     let lastUserOffset = -1;
     let lastAssistantOffset = -1;
     for (let offset = 0; offset < pending.length; offset++) {
@@ -92,13 +96,15 @@ export async function flushMessages(api, state, messages, ctx) {
     }
     // Pre-resolve participant peers for all unique sender IDs in this batch
     const senderIds = new Set();
-    let lastSenderId;
+    let lastSenderId = clawTalkPeer ? ctx.senderId : undefined;
     let userMsgCount = 0;
     for (const { message: msg } of pending) {
         if (!msg || typeof msg !== "object")
             continue;
         const m = msg;
         if (m.role !== "user")
+            continue;
+        if (isClawTalk)
             continue;
         userMsgCount++;
         const rawContent = getRawContent(msg);
@@ -122,10 +128,15 @@ export async function flushMessages(api, state, messages, ctx) {
     for (let i = 0; i < senderIdArray.length; i++) {
         resolvedPeers.set(senderIdArray[i], peers[i]);
     }
-    const defaultParticipantPeer = await state.getParticipantPeer();
+    const defaultParticipantPeer = clawTalkPeer ?? (isClawTalk ? agentPeer : await state.getParticipantPeer());
     // Build peer configs: default owner + all resolved participant peers + agent + parent
     const peerConfigMap = new Map();
-    peerConfigMap.set(OWNER_ID, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
+    if (!isClawTalk) {
+        peerConfigMap.set(OWNER_ID, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
+    }
+    if (clawTalkPeer) {
+        peerConfigMap.set(clawTalkPeer.id, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
+    }
     for (const [, peer] of resolvedPeers) {
         if (peer.id !== OWNER_ID) {
             peerConfigMap.set(peer.id, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
@@ -145,7 +156,10 @@ export async function flushMessages(api, state, messages, ctx) {
         const isSourceUser = clawTalkUserIndex >= 0
             ? rawIndex === clawTalkUserIndex
             : offset === lastUserOffset;
-        const [message] = extractMessages([rawMessage], defaultParticipantPeer, agentPeer, state.cfg.noisePatterns, (senderId) => resolvedPeers.get(senderId), isSourceUser && sourceMessageId
+        const isClawTalkUser = isClawTalk && rawMessage?.role === "user";
+        if (isClawTalkUser && (rawIndex !== clawTalkUserIndex || !clawTalkPeer))
+            continue;
+        const [message] = extractMessages([rawMessage], defaultParticipantPeer, agentPeer, state.cfg.noisePatterns, (senderId) => isClawTalkUser ? undefined : resolvedPeers.get(senderId), isSourceUser && sourceMessageId
             ? {
                 openclawMessageId: sourceMessageId,
                 ...(ctx.runId ? { openclawRunId: ctx.runId } : {}),

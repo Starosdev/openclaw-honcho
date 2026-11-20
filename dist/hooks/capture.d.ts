@@ -12,5 +12,6 @@ export declare function flushMessages(api: OpenClawPluginApi, state: PluginState
     messageProvider?: string;
     runId?: string;
     sourceMessageId?: string;
+    senderId?: string;
 }): Promise<number>;
 export declare function registerCaptureHook(api: OpenClawPluginApi, state: PluginState): void;

@@ -4,6 +4,7 @@ import type { PluginState } from "../state.js";
 import {
   buildSessionKey,
   extractSenderId,
+  isClawTalkSession,
   isSubagentSession,
   peerRecallOptions,
   sessionRecallOptions,
@@ -18,6 +19,8 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
     const sessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId });
 
     state.turnStartIndex.set(sessionKey, event.messages.length);
+    const isClawTalk = isClawTalkSession(ctx.sessionKey);
+    if (isClawTalk && !ctx.senderId) return;
 
     try {
       await state.ensureInitialized();
@@ -26,10 +29,12 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
       // run yet for this turn, so session metadata still reflects the previous
       // speaker. In group chats this would otherwise build context against the
       // prior participant's representation whenever the speaker changes.
-      const currentSenderId = extractSenderId(event.prompt);
-      const participantPeer = currentSenderId
-        ? await state.getParticipantPeer(currentSenderId)
-        : await state.resolveSessionParticipantPeer(sessionKey);
+      const currentSenderId = isClawTalk ? ctx.senderId : extractSenderId(event.prompt);
+      const participantPeer = isClawTalk
+        ? await state.getClawTalkParticipantPeer(currentSenderId)
+        : currentSenderId
+          ? await state.getParticipantPeer(currentSenderId)
+          : await state.resolveSessionParticipantPeer(sessionKey);
 
       const sections: string[] = [];
 
@@ -57,7 +62,7 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
           const session = await state.honcho.session(sessionKey);
           const recall = sessionRecallOptions(automatic, scopeName);
           const context = await session.context({
-            summary: true,
+            summary: !isClawTalk,
             tokens: 2000,
             peerTarget: participantPeer,
             // A scope replaces the perspective peer as the observer.
@@ -67,7 +72,7 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
           // Older Honcho servers can return a workspace card in session mode.
           card = recall.limitToSession ? undefined : context.peerCard;
           representation = context.peerRepresentation;
-          summary = context.summary?.content;
+          if (!isClawTalk) summary = context.summary?.content;
         }
       } catch (e: unknown) {
         const isNotFound =
@@ -102,7 +107,7 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
       // Only when Honcho could not be reached at all. A rejected request means
       // Honcho answered, and substituting local episodes there would hide the
       // defect behind context that looks fine.
-      if (state.cfg.recall.automatic !== "workspace" || !isConnectionFailure(error)) return;
+      if (isClawTalk || state.cfg.recall.automatic !== "workspace" || !isConnectionFailure(error)) return;
       const degraded = await buildDegradedContext(state.cfg.degradedFallback);
       if (!degraded) return;
       api.logger.warn?.("Honcho unreachable; serving local Wonder episodes as degraded context");
