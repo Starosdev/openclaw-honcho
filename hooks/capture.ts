@@ -1,5 +1,6 @@
 // @ts-ignore - resolved by openclaw runtime
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import type { PluginState } from "../state.js";
 import { OWNER_ID } from "../state.js";
 import {
@@ -15,6 +16,8 @@ import {
 } from "../helpers.js";
 import { subagentParentMap } from "./subagent.js";
 
+type CaptureProvenance = { kind?: string; sourceTool?: string; sourceSessionKey?: string };
+
 type CaptureContext = Parameters<typeof isSystemRun>[0] & {
   agentId?: string;
   sessionId?: string;
@@ -22,6 +25,7 @@ type CaptureContext = Parameters<typeof isSystemRun>[0] & {
   runId?: string;
   sourceMessageId?: string;
   senderId?: string;
+  inputProvenance?: CaptureProvenance;
 };
 
 function systemMessageIndexes(messages: unknown[], ctx: CaptureContext): Set<number> {
@@ -186,6 +190,7 @@ export async function flushMessages(
   // Pre-resolve participant peers for all unique sender IDs in this batch
   const senderIds = new Set<string>();
   const senderByIndex = new Map<number, string>();
+  const sendingAgentByIndex = new Map<number, Awaited<ReturnType<typeof state.getAgentPeer>> | undefined>();
   let lastSenderId = clawTalkPeer ? ctx.senderId : undefined;
   let userMsgCount = 0;
   for (const { message: msg, rawIndex } of pending) {
@@ -193,6 +198,7 @@ export async function flushMessages(
     const m = msg as {
       role?: string;
       idempotencyKey?: string;
+      provenance?: CaptureProvenance;
       __openclaw?: { senderId?: unknown; runId?: unknown };
     };
     if (m.role !== "user") continue;
@@ -203,6 +209,15 @@ export async function flushMessages(
     // The hook sender belongs to one run, not to other rows in this snapshot.
     const isCurrentTurn = runId &&
       (m.idempotencyKey === `${runId}:user` || m.__openclaw?.runId === runId);
+    const provenance = m.provenance ?? (isCurrentTurn ? ctx.inputProvenance : undefined);
+    if (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") {
+      const sourceAgentId = typeof provenance.sourceSessionKey === "string"
+        ? parseAgentSessionKey(provenance.sourceSessionKey)?.agentId
+        : undefined;
+      // An unresolved handoff must not fall through to a human peer.
+      sendingAgentByIndex.set(rawIndex, sourceAgentId ? await state.getAgentPeer(sourceAgentId) : undefined);
+      continue;
+    }
     const senderId = (isCurrentTurn ? ctx.senderId : undefined) ||
       (typeof persistedSenderId === "string" ? persistedSenderId : undefined) ||
       extractSenderId(rawContent);
@@ -248,6 +263,14 @@ export async function flushMessages(
   if (parentPeer) {
     peerConfigMap.set(parentPeer.id, { observeMe: false, observeOthers: true });
   }
+  for (const peer of sendingAgentByIndex.values()) {
+    if (peer) {
+      peerConfigMap.set(peer.id, {
+        observeMe: true,
+        observeOthers: peerConfigMap.get(peer.id)?.observeOthers ?? false,
+      });
+    }
+  }
 
   const peerConfigs = Array.from(peerConfigMap.entries()) as Array<
     [string, { observeMe: boolean; observeOthers: boolean }]
@@ -265,8 +288,10 @@ export async function flushMessages(
       : offset === lastUserOffset;
     const isClawTalkUser = isClawTalk && (rawMessage as { role?: unknown } | undefined)?.role === "user";
     if (isClawTalkUser && (rawIndex !== clawTalkUserIndex || !clawTalkPeer)) continue;
+    const sendingAgentPeer = sendingAgentByIndex.get(rawIndex);
+    if (sendingAgentByIndex.has(rawIndex) && !sendingAgentPeer) continue;
     const senderId = senderByIndex.get(rawIndex);
-    const participantPeer = (senderId && resolvedPeers.get(senderId)) || defaultParticipantPeer;
+    const participantPeer = sendingAgentPeer || (senderId && resolvedPeers.get(senderId)) || defaultParticipantPeer;
     const [message] = extractMessages(
       [rawMessage],
       participantPeer,
