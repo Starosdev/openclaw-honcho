@@ -188,6 +188,7 @@ function createState(baseUrl = "https://api.honcho.dev", { crossSessionSearch = 
       baseUrl,
       noisePatterns: [],
       disableDefaultNoisePatterns: false,
+      peerName: "owner",
       ownerObserveOthers: false,
       crossSessionSearch,
     },
@@ -257,6 +258,19 @@ describe("Honcho memory runtime", () => {
       backend: "qmd",
       qmd: {},
     });
+  });
+
+  it("denies custom owner reads through the native runtime without requester identity", async () => {
+    const state = createState();
+    state.cfg.peerName = "vega-owner";
+
+    const result = await createHonchoMemoryRuntime(state).getMemorySearchManager({
+      cfg: {} as never,
+      agentId: "main",
+    });
+
+    expect(result).toMatchObject({ manager: null, error: expect.stringContaining("verified requester") });
+    expect(state.honcho.session).not.toHaveBeenCalled();
   });
 
   it("scopes a runtime-built manager per call via search opts.sessionKey", async () => {

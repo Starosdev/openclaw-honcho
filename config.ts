@@ -14,6 +14,11 @@ export const DEFAULT_NOISE_PATTERNS: string[] = [
 ];
 
 export const DEFAULT_MEMORY_PROCESS_FILE = "/opt/openclaw/vega-data/vega-memory-process.json";
+export const DEFAULT_OWNER_PEER_ID = "owner";
+
+export function isOwnerPeerId(peerId: string, configuredPeerId: string): boolean {
+  return peerId === configuredPeerId || peerId === DEFAULT_OWNER_PEER_ID;
+}
 /**
  * How far a recall call may reach.
  *
@@ -59,6 +64,7 @@ export type HonchoConfig = {
   noisePatterns: string[];
   disableDefaultNoisePatterns: boolean;
   captureSystemRuns: boolean;
+  peerName: string;
   ownerObserveOthers: boolean;
   crossSessionSearch: boolean;
   enableMemoryCompatibilityTools: boolean;
@@ -90,6 +96,11 @@ function resolveEnvVars(value: string): string {
 export const honchoConfigSchema = {
   parse(value: unknown): HonchoConfig {
     const cfg = (value ?? {}) as Record<string, unknown>;
+    const peerName = cfg.peerName === undefined ? DEFAULT_OWNER_PEER_ID : cfg.peerName;
+    if (typeof peerName !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(peerName) ||
+        /^(?:agent-|clawtalk-|openclaw$)/i.test(peerName)) {
+      throw new Error("Honcho peerName must be a valid peer ID outside the agent and ClawTalk namespaces.");
+    }
 
     // Resolve API key with env var fallback
     let apiKey: string | undefined;
@@ -133,6 +144,7 @@ export const honchoConfigSchema = {
       noisePatterns,
       disableDefaultNoisePatterns,
       captureSystemRuns: cfg.captureSystemRuns === true,
+      peerName,
       ownerObserveOthers: typeof cfg.ownerObserveOthers === "boolean" ? cfg.ownerObserveOthers : false,
       crossSessionSearch: typeof cfg.crossSessionSearch === "boolean" ? cfg.crossSessionSearch : true,
       enableMemoryCompatibilityTools: cfg.enableMemoryCompatibilityTools === true,

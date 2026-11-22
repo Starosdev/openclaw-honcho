@@ -75,6 +75,25 @@ async function askArgs(
 }
 
 describe("recall boundaries are applied per path", () => {
+  it("withholds custom and historical owner recall without verified owner context", async () => {
+    const { state, session } = mkState({});
+    state.cfg.peerName = "vega-owner";
+    let handler: ((e: unknown, c: unknown) => Promise<unknown>) | undefined;
+    registerContextHook(
+      { on: (n: string, fn: never) => { if (n === "before_prompt_build") handler = fn; }, logger } as never,
+      state,
+    );
+    const prompt = { prompt: "ordinary input", messages: [] };
+    for (const senderId of ["owner", "vega-owner"]) {
+      expect(await handler?.(prompt, { ...ctx, senderId })).toBeUndefined();
+    }
+    expect(session.context).not.toHaveBeenCalled();
+    await handler?.(prompt, { ...ctx, senderId: "alice" });
+    expect(session.context).toHaveBeenCalledWith(expect.objectContaining({
+      peerTarget: { id: "alice" }, summary: false,
+    }));
+  });
+
   it("records the shared DM capture boundary for a short prompt without recalling", async () => {
     const { state } = mkState({});
     let handler: ((e: unknown, c: unknown) => Promise<unknown>) | undefined;

@@ -1,6 +1,7 @@
 // @ts-ignore - resolved by openclaw runtime
 import type { MemoryPluginCapability } from "openclaw/plugin-sdk/core";
 import type { Peer } from "@honcho-ai/sdk";
+import { DEFAULT_OWNER_PEER_ID } from "./config.js";
 import { isManagedHonchoCloud, type PluginState, type ToolRequester } from "./state.js";
 
 const DEFAULT_SEARCH_RESULTS = 10;
@@ -294,6 +295,11 @@ export function createHonchoMemoryRuntime(
 ): NonNullable<MemoryPluginCapability["runtime"]> {
   return {
     async getMemorySearchManager(params: { agentId?: string }) {
+      // This host entry point has no requester. Custom owner reads go
+      // through the tools that carry verified requester identity.
+      if (state.cfg.peerName !== DEFAULT_OWNER_PEER_ID) {
+        return { manager: null, error: "Honcho custom owner memory requires a verified requester." };
+      }
       return getHonchoMemorySearchManager(state, { agentId: params.agentId });
     },
 

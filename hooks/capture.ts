@@ -2,7 +2,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import type { PluginState } from "../state.js";
-import { OWNER_ID } from "../state.js";
 import {
   buildSessionKey,
   dmHookSessionContext,
@@ -290,13 +289,13 @@ export async function flushMessages(
   // Build peer configs: default owner + all resolved participant peers + agent + parent
   const peerConfigMap = new Map<string, { observeMe: boolean; observeOthers: boolean }>();
   if (!isClawTalk) {
-    peerConfigMap.set(OWNER_ID, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
+    peerConfigMap.set(defaultParticipantPeer.id, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
   }
   if (clawTalkPeer) {
     peerConfigMap.set(clawTalkPeer.id, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
   }
   for (const [, peer] of resolvedPeers) {
-    if (peer.id !== OWNER_ID) {
+    if (peer.id !== defaultParticipantPeer.id) {
       peerConfigMap.set(peer.id, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
     }
   }

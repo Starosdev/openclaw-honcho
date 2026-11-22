@@ -7,7 +7,6 @@ import type { Honcho, Peer } from "@honcho-ai/sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { type HonchoConfig } from "./config.js";
 import { PeersPersister } from "./peers.js";
-export declare const OWNER_ID = "owner";
 export declare const LEGACY_PEER_ID = "openclaw";
 export declare const HONCHO_CLOUD_HOSTNAME = "api.honcho.dev";
 /**
@@ -26,7 +25,7 @@ export type ToolRequester = {
 export type PluginState = {
     honcho: Honcho;
     cfg: HonchoConfig;
-    /** Cache of resolved participant peers, keyed by channel peer ID (or OWNER_ID for default).
+    /** Cache of resolved participant peers, keyed by channel peer ID.
      * "Participant" intentionally generalizes over humans AND non-agent bots/agents in group
      * chats — anyone in the conversation who isn't the local OpenClaw agent peer. */
     participantPeers: Map<string, Peer>;
@@ -41,8 +40,7 @@ export type PluginState = {
     ensureInitialized: () => Promise<void>;
     getAgentPeer: (agentId?: string) => Promise<Peer>;
     /** Sender_id → Honcho peer_id map, backed by ~/.honcho/openclaw-peers.json.
-     * Unknown senders are auto-seeded to OWNER_ID; the user hand-edits the file
-     * to split specific senders off to their own peer IDs. */
+     * Unknown senders follow the file's owner or per-sender policy. */
     peersPersister: PeersPersister;
     /** Resolve a participant peer by channel peer ID. Returns default "owner" peer if no ID given. */
     getParticipantPeer: (channelPeerId?: string) => Promise<Peer>;

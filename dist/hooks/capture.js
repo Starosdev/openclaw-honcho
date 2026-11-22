@@ -1,5 +1,4 @@
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { OWNER_ID } from "../state.js";
 import { buildSessionKey, dmHookSessionContext, hasSharedDmHistory, isSharedMainSessionKey, resolveSharedDmKey, restoreSharedDmMetadata, selectSharedDmHistory, sharedDmParticipants, sharedDmSourceMessageId, usesSharedGroupRouting, classifySession, isClawTalkSession, isSystemRun, isSubagentSession, normalizeSessionKey, extractMessages, extractSenderId, getMessageIdentity, getRawContent, } from "../helpers.js";
 import { subagentParentMap } from "./subagent.js";
 function systemMessageIndexes(messages, ctx) {
@@ -237,13 +236,13 @@ export async function flushMessages(api, state, messages, ctx, preservePendingHi
     // Build peer configs: default owner + all resolved participant peers + agent + parent
     const peerConfigMap = new Map();
     if (!isClawTalk) {
-        peerConfigMap.set(OWNER_ID, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
+        peerConfigMap.set(defaultParticipantPeer.id, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
     }
     if (clawTalkPeer) {
         peerConfigMap.set(clawTalkPeer.id, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
     }
     for (const [, peer] of resolvedPeers) {
-        if (peer.id !== OWNER_ID) {
+        if (peer.id !== defaultParticipantPeer.id) {
             peerConfigMap.set(peer.id, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
         }
     }

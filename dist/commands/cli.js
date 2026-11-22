@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
+import { DEFAULT_OWNER_PEER_ID } from "../config.js";
 import { createHonchoClient } from "../honcho-client.js";
-import { OWNER_ID } from "../state.js";
 const MANIFEST_PATH = () => path.join(os.homedir(), ".openclaw", ".upload-manifest.json");
 function loadManifest() {
     try {
@@ -31,6 +31,7 @@ export function registerCli(api, state) {
             .description("Configure Honcho API key and upload memory files to Honcho")
             .option("--reconfigure", "Force re-entry of all configuration values")
             .action(async (options) => {
+            const ownerPeerId = state.cfg.peerName;
             const configDir = path.join(os.homedir(), ".openclaw");
             const configPath = path.join(configDir, "openclaw.json");
             // Load existing config to use as defaults
@@ -143,7 +144,7 @@ export function registerCli(api, state) {
                     if (!fs.existsSync(dirPath))
                         return;
                     const dirEntries = fs.readdirSync(dirPath, { withFileTypes: true });
-                    const peerId = peerType === "owner" ? OWNER_ID : `agent-${agentId ?? defaultAgentId}`;
+                    const peerId = peerType === "owner" ? ownerPeerId : `agent-${agentId ?? defaultAgentId}`;
                     for (const e of dirEntries) {
                         const full = path.join(dirPath, e.name);
                         if (e.isDirectory())
@@ -176,8 +177,8 @@ export function registerCli(api, state) {
                     // Owner files (USER.md) always route to the owner peer.
                     for (const file of OWNER_FILES) {
                         const p = path.join(wsDir, file);
-                        if (fs.existsSync(p) && !hasDetected(p, OWNER_ID))
-                            detected.push({ filePath: p, peer: "owner", peerId: OWNER_ID });
+                        if (fs.existsSync(p) && !hasDetected(p, ownerPeerId))
+                            detected.push({ filePath: p, peer: "owner", peerId: ownerPeerId });
                     }
                     // Agent files, MEMORY.md, and working dirs (memory/, canvas/)
                     // are the agent's state — only collected when we know which
@@ -252,16 +253,16 @@ export function registerCli(api, state) {
                         }
                         if (fs.statSync(inputPath).isDirectory()) {
                             collectDir(inputPath, peerType, peerType === "agent" ? defaultAgentId : undefined);
-                            console.log(`  + ${inputPath}/ (directory) → ${peerType === "owner" ? OWNER_ID : defaultAgentPeerId}`);
+                            console.log(`  + ${inputPath}/ (directory) → ${peerType === "owner" ? ownerPeerId : defaultAgentPeerId}`);
                         }
                         else {
                             detected.push({
                                 filePath: inputPath,
                                 peer: peerType,
-                                peerId: peerType === "owner" ? OWNER_ID : defaultAgentPeerId,
+                                peerId: peerType === "owner" ? ownerPeerId : defaultAgentPeerId,
                                 agentId: peerType === "agent" ? defaultAgentId : undefined,
                             });
-                            console.log(`  + ${inputPath} → ${peerType === "owner" ? OWNER_ID : defaultAgentPeerId}`);
+                            console.log(`  + ${inputPath} → ${peerType === "owner" ? ownerPeerId : defaultAgentPeerId}`);
                         }
                     }
                 }
@@ -293,8 +294,15 @@ export function registerCli(api, state) {
                     workspaceId: resolvedWorkspaceId,
                 });
                 const existingMeta = await setupHoncho.getMetadata();
+                if (ownerPeerId !== DEFAULT_OWNER_PEER_ID &&
+                    Object.values(existingMeta.agentPeerMap ?? {}).includes(ownerPeerId)) {
+                    throw new Error("Honcho peerName is already assigned to an agent.");
+                }
+                const ownerPeerSetup = await setupHoncho.peer(ownerPeerId);
+                if (ownerPeerId !== DEFAULT_OWNER_PEER_ID && ownerPeerSetup.metadata?.agentId) {
+                    throw new Error("Honcho peerName is already assigned to an agent.");
+                }
                 await setupHoncho.setMetadata({ ...existingMeta });
-                const ownerPeerSetup = await setupHoncho.peer(OWNER_ID, { metadata: {} });
                 const agentPeerSetupMap = new Map();
                 for (const agent of normalizedAgents) {
                     const peerId = `agent-${agent.id}`;

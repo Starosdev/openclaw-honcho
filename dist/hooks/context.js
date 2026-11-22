@@ -1,3 +1,4 @@
+import { DEFAULT_OWNER_PEER_ID, isOwnerPeerId } from "../config.js";
 import { buildSessionKey, dmHookSessionContext, resolveSharedDmKey, restoreSharedDmMetadata, selectSharedDmHistory, extractSenderId, isClawTalkSession, isSystemRun, isSubagentSession, peerRecallOptions, sessionRecallOptions, } from "../helpers.js";
 import { buildDegradedContext, isConnectionFailure } from "../degraded.js";
 export function registerContextHook(api, state) {
@@ -19,6 +20,7 @@ export function registerContextHook(api, state) {
         const isClawTalk = isClawTalkSession(ctx.sessionKey);
         if (isClawTalk && !ctx.senderId)
             return;
+        const customOwner = state.cfg.peerName !== DEFAULT_OWNER_PEER_ID;
         try {
             await state.ensureInitialized();
             const agentPeer = await state.getAgentPeer(agentId);
@@ -30,6 +32,9 @@ export function registerContextHook(api, state) {
                 : currentSenderId
                     ? await state.getParticipantPeer(currentSenderId)
                     : await state.resolveSessionParticipantPeer(sessionKey);
+            // Prompt hooks do not carry verified-owner authority. Explicit tools do.
+            if (customOwner && isOwnerPeerId(participantPeer.id, state.cfg.peerName))
+                return;
             const sections = [];
             const { automatic, scopeName } = state.cfg.recall;
             let card;
@@ -57,7 +62,7 @@ export function registerContextHook(api, state) {
                     const session = await state.honcho.session(sessionKey);
                     const recall = sessionRecallOptions(automatic, scopeName);
                     const context = await session.context({
-                        summary: !isClawTalk,
+                        summary: !isClawTalk && !customOwner,
                         tokens: 2000,
                         peerTarget: participantPeer,
                         // A scope replaces the perspective peer as the observer.
@@ -67,7 +72,7 @@ export function registerContextHook(api, state) {
                     // Older Honcho servers can return a workspace card in session mode.
                     card = recall.limitToSession ? undefined : context.peerCard;
                     representation = context.peerRepresentation;
-                    if (!isClawTalk)
+                    if (!isClawTalk && !customOwner)
                         summary = context.summary?.content;
                 }
             }
@@ -102,7 +107,7 @@ export function registerContextHook(api, state) {
             // Only when Honcho could not be reached at all. A rejected request means
             // Honcho answered, and substituting local episodes there would hide the
             // defect behind context that looks fine.
-            if (isClawTalk || state.cfg.recall.automatic !== "workspace" || !isConnectionFailure(error))
+            if (isClawTalk || customOwner || state.cfg.recall.automatic !== "workspace" || !isConnectionFailure(error))
                 return;
             const degraded = await buildDegradedContext(state.cfg.degradedFallback);
             if (!degraded)
