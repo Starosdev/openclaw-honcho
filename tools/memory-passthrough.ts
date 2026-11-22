@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 // @ts-ignore - resolved by openclaw runtime
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import type { PluginState } from "../state.js";
-import { buildSessionKey } from "../helpers.js";
+import { buildSessionKey, toolSessionKeyContext } from "../helpers.js";
 import { getHonchoMemorySearchManager } from "../runtime.js";
 
 const MemorySearchSchema = Type.Object({
@@ -103,7 +103,7 @@ export function registerMemoryPassthrough(api: OpenClawPluginApi, state: PluginS
         readNumberParam(p, "minScore");
         const crossSessionSearch = typeof p.crossSessionSearch === "boolean" ? p.crossSessionSearch : undefined;
         const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
-        const honchoSessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId });
+        const honchoSessionKey = buildSessionKey(toolSessionKeyContext(ctx, agentId));
 
         try {
           const { manager } = await getHonchoMemorySearchManager(state, {
@@ -144,7 +144,7 @@ export function registerMemoryPassthrough(api: OpenClawPluginApi, state: PluginS
         const from = readNumberParam(p, "from", { integer: true });
         const lines = readNumberParam(p, "lines", { integer: true });
         const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
-        const honchoSessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId });
+        const honchoSessionKey = buildSessionKey(toolSessionKeyContext(ctx, agentId));
 
         try {
           const { manager } = await getHonchoMemorySearchManager(state, {

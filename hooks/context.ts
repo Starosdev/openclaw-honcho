@@ -3,6 +3,9 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import type { PluginState } from "../state.js";
 import {
   buildSessionKey,
+  dmHookSessionContext,
+  resolveSharedDmKey,
+  selectSharedDmHistory,
   extractSenderId,
   isClawTalkSession,
   isSystemRun,
@@ -18,9 +21,13 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
     if (!state.cfg.captureSystemRuns && isSystemRun(ctx)) return;
 
     const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
-    const sessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId });
+    const keyContext = dmHookSessionContext({ ...ctx, agentId }, api.config);
+    const sessionKey = buildSessionKey(keyContext);
 
-    state.turnStartIndex.set(sessionKey, event.messages.length);
+    const dmKey = resolveSharedDmKey(keyContext);
+    state.turnStartIndex.set(sessionKey, dmKey
+      ? selectSharedDmHistory(ctx.sessionKey, dmKey, event.messages).length
+      : event.messages.length);
     const isClawTalk = isClawTalkSession(ctx.sessionKey);
     if (isClawTalk && !ctx.senderId) return;
 

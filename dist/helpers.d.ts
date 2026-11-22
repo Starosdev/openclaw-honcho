@@ -35,24 +35,50 @@ export declare function isSystemRun(ctx: {
  * disagree with the hash. `ctx.messageProvider` is deliberately not consulted.
  */
 export declare function extractProvider(sessionKey: string): string | null;
+type HonchoSessionContext = {
+    sessionKey?: string;
+    agentId?: string;
+    channel?: string;
+    messageProvider?: string;
+    senderId?: string;
+};
+export declare function isSharedMainSessionKey(sessionKey?: string): boolean;
+/** Match the per-channel-peer key for the external DM channels used by Vega. */
+export declare function resolveSharedDmKey(ctx?: HonchoSessionContext): string | undefined;
+export declare function toolSessionKeyContext(ctx: {
+    sessionKey?: string;
+    agentId?: string;
+    messageChannel?: string;
+    requesterSenderId?: string;
+    config?: {
+        session?: object;
+    };
+}, agentId?: string): HonchoSessionContext;
+export declare function usesSharedGroupRouting(config?: {
+    session?: object;
+}): boolean;
+export declare function dmHookSessionContext(ctx: HonchoSessionContext, config?: {
+    session?: object;
+}): HonchoSessionContext;
+export declare function sharedDmSourceMessageId(message: unknown): string | undefined;
+export declare function hasSharedDmHistory(sessionKey: string | undefined, messages: unknown[]): boolean;
+/** Project shared history before using per-participant offsets and checkpoints. */
+export declare function selectSharedDmHistory(sessionKey: string | undefined, dmKey: string, messages: unknown[]): unknown[];
 /**
  * Build a Honcho session id of the form
  * `<sessionClass>-[<provider>-]<agentId>-<24 hex>`.
  *
  * The id is decoupled from OpenClaw's routing-key DSL: prefix segments are
  * derived from the same inputs as the hash, so they cannot drift independently.
- * `ctx.messageProvider` is intentionally not an input — that field is unstable
- * (missing → "unknown") and lives in session metadata instead.
+ * Routed keys are authoritative. Shared main DMs use trusted channel/sender
+ * metadata to derive the equivalent per-channel-peer key.
  *
  * When `ctx.agentId` is undefined, callers should pass `resolveDefaultAgentId`
  * (typically `state.resolveDefaultAgentId`) so the id matches the agent id used
  * by `flushMessages` / `before_prompt_build`. Without a resolver we fall back
  * to "main", which only matches workspaces with no configured default agent.
  */
-export declare function buildSessionKey(ctx?: {
-    sessionKey?: string;
-    agentId?: string;
-}, resolveDefaultAgentId?: () => string): string;
+export declare function buildSessionKey(ctx?: HonchoSessionContext, resolveDefaultAgentId?: () => string): string;
 export declare function isSubagentSession(ctx?: {
     sessionKey?: string;
 }): boolean;
@@ -98,3 +124,4 @@ export declare function peerRecallOptions(scope: RecallScope, scopeName: string 
  */
 export declare function shouldSkipMessage(content: string, noisePatterns: string[]): boolean;
 export declare function extractMessages(rawMessages: unknown[], defaultParticipantPeer: Peer, agentPeer: Peer, noisePatterns?: string[], resolvePeer?: (senderId: string) => Peer | undefined, messageMetadata?: Record<string, unknown>): MessageInput[];
+export {};

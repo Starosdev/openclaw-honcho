@@ -91,14 +91,82 @@ export function extractProvider(sessionKey) {
     const m = /^agent:[^:]+:([^:]+)/.exec(sessionKey);
     return m ? m[1].toLowerCase() : null;
 }
+export function isSharedMainSessionKey(sessionKey) {
+    return /^agent:[^:]+:main$/i.test(normalizeSessionKey(sessionKey));
+}
+/** Match the per-channel-peer key for the external DM channels used by Vega. */
+export function resolveSharedDmKey(ctx) {
+    if (!isSharedMainSessionKey(ctx?.sessionKey))
+        return;
+    const channel = (ctx?.channel ?? ctx?.messageProvider)?.trim().toLowerCase();
+    const sender = ctx?.senderId?.trim();
+    if ((channel !== "telegram" && channel !== "discord") || !sender || !/^\d+$/.test(sender))
+        return;
+    return `${normalizeSessionKey(ctx?.sessionKey).slice(0, -5).toLowerCase()}:${channel}:direct:${sender}`;
+}
+export function toolSessionKeyContext(ctx, agentId = ctx.agentId) {
+    return {
+        sessionKey: ctx.sessionKey,
+        agentId,
+        channel: usesSharedGroupRouting(ctx.config) ? undefined : ctx.messageChannel,
+        senderId: ctx.requesterSenderId,
+    };
+}
+// OpenClaw 2026.7 SDK types predate groupScope, but Vega can set it at runtime.
+export function usesSharedGroupRouting(config) {
+    const session = config?.session;
+    return !!session && "groupScope" in session && session.groupScope === "main";
+}
+export function dmHookSessionContext(ctx, config) {
+    if (!usesSharedGroupRouting(config))
+        return ctx;
+    return { sessionKey: ctx.sessionKey, agentId: ctx.agentId };
+}
+function dmTranscriptRow(message) {
+    return message;
+}
+export function sharedDmSourceMessageId(message) {
+    const row = dmTranscriptRow(message);
+    const messageId = row?.__openclaw?.transport?.messageId;
+    return row?.role === "user" && typeof messageId === "string" ? messageId : undefined;
+}
+function persistedDmKey(sessionKey, row) {
+    const senderId = row?.__openclaw?.senderId;
+    const channel = row?.__openclaw?.transport?.channel;
+    if (row?.role !== "user" || row.display === false ||
+        (row.provenance && row.provenance.kind !== "external_user") ||
+        typeof senderId !== "string" || typeof channel !== "string")
+        return;
+    return resolveSharedDmKey({ sessionKey, senderId, channel });
+}
+export function hasSharedDmHistory(sessionKey, messages) {
+    return messages.some((message) => persistedDmKey(sessionKey, dmTranscriptRow(message)) !== undefined);
+}
+/** Project shared history before using per-participant offsets and checkpoints. */
+export function selectSharedDmHistory(sessionKey, dmKey, messages) {
+    let selected = false;
+    let userRunId;
+    return messages.filter((message) => {
+        const row = dmTranscriptRow(message);
+        if (row?.role === "user") {
+            selected = persistedDmKey(sessionKey, row) === dmKey;
+            userRunId = row.__openclaw?.runId ??
+                (row.idempotencyKey?.endsWith(":user") ? row.idempotencyKey.slice(0, -5) : undefined);
+            return selected;
+        }
+        // A shifted snapshot may start with a reply, and stamped replies can arrive out of order.
+        return selected && row?.role === "assistant" &&
+            (!row.__openclaw?.runId || row.__openclaw.runId === userRunId);
+    });
+}
 /**
  * Build a Honcho session id of the form
  * `<sessionClass>-[<provider>-]<agentId>-<24 hex>`.
  *
  * The id is decoupled from OpenClaw's routing-key DSL: prefix segments are
  * derived from the same inputs as the hash, so they cannot drift independently.
- * `ctx.messageProvider` is intentionally not an input — that field is unstable
- * (missing → "unknown") and lives in session metadata instead.
+ * Routed keys are authoritative. Shared main DMs use trusted channel/sender
+ * metadata to derive the equivalent per-channel-peer key.
  *
  * When `ctx.agentId` is undefined, callers should pass `resolveDefaultAgentId`
  * (typically `state.resolveDefaultAgentId`) so the id matches the agent id used
@@ -106,7 +174,7 @@ export function extractProvider(sessionKey) {
  * to "main", which only matches workspaces with no configured default agent.
  */
 export function buildSessionKey(ctx, resolveDefaultAgentId) {
-    const normalized = normalizeSessionKey(ctx?.sessionKey);
+    const normalized = resolveSharedDmKey(ctx) ?? normalizeSessionKey(ctx?.sessionKey);
     const sessionClass = classifySession(normalized);
     const agentId = (ctx?.agentId ?? resolveDefaultAgentId?.() ?? "main").toLowerCase();
     const provider = extractProvider(normalized);

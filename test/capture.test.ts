@@ -89,6 +89,34 @@ function loggerStub() {
 }
 
 describe("flushMessages metadata", () => {
+  it("keeps the other sender's turns out of a shared DM capture and replay", async () => {
+    const { state, session } = createMockState();
+    const api = { logger: loggerStub() } as never;
+    const ctx = { sessionKey: "agent:main:main", agentId: "main", channel: "telegram", senderId: "222" };
+    const user = (senderId: string, content: string) => ({
+      role: "user", content, idempotencyKey: senderId + ":user",
+      __openclaw: { senderId, transport: { channel: "telegram", messageId: "msg-" + senderId } },
+    });
+    const reply = (runId: string, content: string) => ({ role: "assistant", content, __openclaw: { runId } });
+    const snapshot = [
+      user("111", "Alice input"), reply("111", "Alice reply"),
+      user("222", "Bob input"), reply("111", "Late Alice reply"), reply("222", "Bob reply"),
+    ];
+    state.turnStartIndex.set(buildSessionKey(ctx), 0);
+    expect(await flushMessages(api, state, snapshot, ctx)).toBe(2);
+    expect(session.addMessages).toHaveBeenCalledWith([
+      { text: "Bob input", metadata: { openclawMessageId: "msg-222" } }, { text: "Bob reply" },
+    ]);
+    expect(session.metadata).toMatchObject({
+      openclawSessionKey: "agent:main:main",
+      conversationSessionKey: "agent:main:telegram:direct:222",
+    });
+    expect(await flushMessages(api, state, [snapshot[1], ...snapshot.slice(2)], ctx)).toBe(0);
+    expect(await flushMessages(api, state, snapshot, { sessionKey: ctx.sessionKey }, true)).toBe(0);
+    expect(session.addMessages).toHaveBeenCalledOnce();
+    expect(state.honcho.session).toHaveBeenLastCalledWith(buildSessionKey(ctx));
+  });
+
   it("stores human turns and sessions_send handoffs under separate peers", async () => {
     const { state, session } = createMockState();
     const api = { logger: loggerStub() } as never;

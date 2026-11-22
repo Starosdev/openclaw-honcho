@@ -1,6 +1,6 @@
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { OWNER_ID } from "../state.js";
-import { buildSessionKey, classifySession, isClawTalkSession, isSystemRun, isSubagentSession, normalizeSessionKey, extractMessages, extractSenderId, getMessageIdentity, getRawContent, } from "../helpers.js";
+import { buildSessionKey, dmHookSessionContext, hasSharedDmHistory, isSharedMainSessionKey, resolveSharedDmKey, selectSharedDmHistory, sharedDmSourceMessageId, usesSharedGroupRouting, classifySession, isClawTalkSession, isSystemRun, isSubagentSession, normalizeSessionKey, extractMessages, extractSenderId, getMessageIdentity, getRawContent, } from "../helpers.js";
 import { subagentParentMap } from "./subagent.js";
 function systemMessageIndexes(messages, ctx) {
     const entries = messages.map((message) => {
@@ -54,7 +54,19 @@ export async function flushMessages(api, state, messages, ctx, preservePendingHi
     if (/(?:^|:)active-memory:[a-f0-9]{12}$/i.test(openclawSessionKey))
         return 0;
     const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
-    const sessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId });
+    const keyContext = dmHookSessionContext({ ...ctx, agentId }, api.config);
+    const dmKey = resolveSharedDmKey(keyContext);
+    if (dmKey) {
+        messages = selectSharedDmHistory(ctx.sessionKey, dmKey, messages);
+        if (!messages.length)
+            return 0;
+    }
+    else if (!usesSharedGroupRouting(api.config) && isSharedMainSessionKey(ctx.sessionKey) &&
+        hasSharedDmHistory(ctx.sessionKey, messages)) {
+        // Reset can expose a mixed transcript with no trusted sender or channel.
+        return 0;
+    }
+    const sessionKey = buildSessionKey(keyContext);
     const isSubagent = isSubagentSession(ctx);
     const parentAgentId = isSubagent ? subagentParentMap.get(ctx.sessionKey ?? "") : undefined;
     const sessionClass = classifySession(openclawSessionKey);
@@ -74,6 +86,7 @@ export async function flushMessages(api, state, messages, ctx, preservePendingHi
     const sessionMeta = {
         agentId,
         openclawSessionKey,
+        ...(dmKey ? { conversationSessionKey: dmKey } : {}),
         sessionClass,
         ...(typeof ctx.messageProvider === "string" && ctx.messageProvider.length > 0
             ? { messageProvider: ctx.messageProvider }
@@ -109,10 +122,14 @@ export async function flushMessages(api, state, messages, ctx, preservePendingHi
         : skipped?.size
             ? 0
             : Math.min(Math.max(state.turnStartIndex.get(sessionKey) ?? 0, 0), messages.length);
-    const sourceMessageId = clawTalkUserIndex >= 0 ? runId : systemRun ? undefined : ctx.sourceMessageId;
+    const sourceMessageId = clawTalkUserIndex >= 0 ? runId : systemRun || dmKey ? undefined : ctx.sourceMessageId;
     const rawLastSavedIndex = typeof existingMeta.lastSavedIndex === "number" ? existingMeta.lastSavedIndex : 0;
     const lastSavedIndex = Math.min(Math.max(rawLastSavedIndex, 0), messages.length);
     const checkpoint = existingMeta.lastSavedMessageId;
+    if (dmKey && checkpoint === undefined && !state.turnStartIndex.has(sessionKey)) {
+        // A new participant session has no boundary for distinguishing prior shared history.
+        return 0;
+    }
     let startIndex = Math.max(turnStartIndex, lastSavedIndex);
     if (typeof checkpoint === "string" && checkpoint.length > 0) {
         const hintedIndex = lastSavedIndex - 1;
@@ -260,14 +277,17 @@ export async function flushMessages(api, state, messages, ctx, preservePendingHi
             continue;
         const senderId = senderByIndex.get(rawIndex);
         const participantPeer = sendingAgentPeer || (senderId && resolvedPeers.get(senderId)) || defaultParticipantPeer;
+        const dmMessageId = dmKey ? sharedDmSourceMessageId(rawMessage) : undefined;
         const [message] = extractMessages([rawMessage], participantPeer, agentPeer, state.cfg.noisePatterns, undefined, isSourceUser && sourceMessageId
             ? {
                 openclawMessageId: sourceMessageId,
                 ...(runId ? { openclawRunId: runId } : {}),
             }
-            : offset === lastAssistantOffset && runId
-                ? { openclawRunId: runId }
-                : undefined);
+            : dmMessageId
+                ? { openclawMessageId: dmMessageId }
+                : offset === lastAssistantOffset && runId
+                    ? { openclawRunId: runId }
+                    : undefined);
         if (message)
             extracted.push({ message, rawIndex });
     }
@@ -321,7 +341,7 @@ export function registerCaptureHook(api, state) {
     const flushCapturedMessages = (messages, ctx, preservePendingHistory = false) => {
         const sourceMessageId = ctx.runId ? sourceMessageIdsByRun.get(ctx.runId) : undefined;
         const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
-        const sessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId });
+        const sessionKey = buildSessionKey(dmHookSessionContext({ ...ctx, agentId }, api.config));
         const previous = flushesBySession.get(sessionKey);
         // Detached agent_end and compaction hooks can overlap on the same cursor.
         const current = Promise.resolve(previous).catch(() => undefined).then(() => flushMessages(api, state, messages, { ...ctx, agentId, sourceMessageId }, preservePendingHistory));
@@ -393,7 +413,7 @@ export function registerCaptureHook(api, state) {
                 sourceMessageIdsByRun.delete(runId);
             if (ctx.sessionKey)
                 pendingSourceMessageIdsBySession.delete(ctx.sessionKey);
-            const sessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId: ctx.agentId }, state.resolveDefaultAgentId);
+            const sessionKey = buildSessionKey(dmHookSessionContext(ctx, api.config), state.resolveDefaultAgentId);
             state.turnStartIndex.delete(sessionKey);
             if (isSubagentSession(ctx))
                 subagentParentMap.delete(ctx.sessionKey ?? "");

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSessionKey,
+  toolSessionKeyContext,
   classifySession,
   extractSenderId,
   extractProvider,
@@ -13,6 +14,23 @@ const THREAD_ID_RE = /^thread-[a-z0-9]+-[a-z0-9_-]+-[0-9a-f]{24}$/;
 const UNKNOWN_ID_RE = /^unknown-[a-z0-9_-]+-[0-9a-f]{24}$/;
 
 describe("buildSessionKey", () => {
+  it("keys shared DMs by channel and sender while preserving explicit routes", () => {
+    const dm = { sessionKey: "agent:main:main", agentId: "main", channel: "telegram", senderId: "111" };
+    const expected = buildSessionKey({ sessionKey: "agent:main:telegram:direct:111", agentId: "main" });
+    expect(buildSessionKey(dm)).toBe(expected);
+    expect(buildSessionKey({ ...dm, senderId: "222" })).not.toBe(expected);
+    expect(buildSessionKey({ ...dm, channel: "discord" })).not.toBe(expected);
+    expect(buildSessionKey(toolSessionKeyContext({
+      sessionKey: dm.sessionKey, agentId: dm.agentId, messageChannel: dm.channel, requesterSenderId: dm.senderId,
+    }))).toBe(expected);
+    expect(buildSessionKey(toolSessionKeyContext({
+      sessionKey: dm.sessionKey, agentId: dm.agentId, messageChannel: dm.channel, requesterSenderId: dm.senderId,
+      config: { session: { groupScope: "main" } },
+    }))).toBe(buildSessionKey({ sessionKey: dm.sessionKey, agentId: dm.agentId }));
+    const routed = { sessionKey: "agent:main:clawtalk-user:fixture", agentId: "main" };
+    expect(buildSessionKey({ ...dm, ...routed })).toBe(buildSessionKey(routed));
+  });
+
   it("stays well under Honcho's 100-char cap even for absurdly long cron keys", () => {
     const longJob = "j".repeat(200);
     const longRun = "r".repeat(300);
