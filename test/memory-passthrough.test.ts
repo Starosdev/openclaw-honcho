@@ -4,11 +4,40 @@ const { getHonchoMemorySearchManagerMock } = vi.hoisted(() => ({
   getHonchoMemorySearchManagerMock: vi.fn(),
 }));
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../runtime.js")>(),
   getHonchoMemorySearchManager: getHonchoMemorySearchManagerMock,
 }));
 
+import honchoPlugin from "../index.js";
 import { registerMemoryPassthrough } from "../tools/memory-passthrough.js";
+
+it.each([
+  [undefined, []],
+  [false, []],
+  [true, ["memory_search", "memory_get"]],
+])("keeps Honcho's memory capability and registers aliases according to opt-in %s", (optIn, expected) => {
+  const registerMemoryCapability = vi.fn();
+  const on = vi.fn();
+  const registerTool = vi.fn();
+  honchoPlugin.register!({
+    pluginConfig: { baseUrl: "http://localhost:1", enableMemoryCompatibilityTools: optIn },
+    config: { plugins: { slots: { memory: "openclaw-honcho" } } },
+    logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
+    registerMemoryCapability,
+    on,
+    registerTool,
+    registerCli: vi.fn(),
+  } as never);
+
+  expect(honchoPlugin.kind).toBe("memory");
+  expect(registerMemoryCapability).toHaveBeenCalledOnce();
+  expect(on).toHaveBeenCalledWith("agent_end", expect.any(Function));
+  const aliases = registerTool.mock.calls
+    .map(([, options]) => options?.name)
+    .filter((name) => name === "memory_search" || name === "memory_get");
+  expect(aliases).toEqual(expected);
+});
 
 describe("memory passthrough tools", () => {
   beforeEach(() => {

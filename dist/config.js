@@ -85,6 +85,7 @@ export const honchoConfigSchema = {
             captureSystemRuns: cfg.captureSystemRuns === true,
             ownerObserveOthers: typeof cfg.ownerObserveOthers === "boolean" ? cfg.ownerObserveOthers : false,
             crossSessionSearch: typeof cfg.crossSessionSearch === "boolean" ? cfg.crossSessionSearch : true,
+            enableMemoryCompatibilityTools: cfg.enableMemoryCompatibilityTools === true,
             antiHits: (() => {
                 const raw = (cfg.antiHits ?? {});
                 const bounded = (value, fallback, minimum, maximum) => typeof value === "number" && Number.isFinite(value) && value >= minimum && value <= maximum

@@ -50,6 +50,7 @@ export type HonchoConfig = {
     captureSystemRuns: boolean;
     ownerObserveOthers: boolean;
     crossSessionSearch: boolean;
+    enableMemoryCompatibilityTools: boolean;
     degradedFallback: DegradedFallbackConfig;
     antiHits: AntiHitsConfig;
     recall: RecallConfig;

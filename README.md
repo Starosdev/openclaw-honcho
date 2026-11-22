@@ -267,7 +267,7 @@ stored together.
 
 ## Local File Search (QMD Integration)
 
-This plugin automatically exposes OpenClaw's `memory_search` and `memory_get` tools when a memory backend is configured. This allows you to use both Honcho's cloud-based memory AND local file search together.
+Honcho's `memory_search` and `memory_get` compatibility aliases are off by default. Set `plugins.entries.openclaw-honcho.config.enableMemoryCompatibilityTools` to `true` on gateways that do not supply requester-scoped tools with those names. Vega's Gateway revision `609bc7d` needs this opt-in when Honcho owns its memory slot. This setting controls tool registration. Honcho's memory slot, recall hooks, and capture hooks use their existing settings.
 
 ### Setup
 

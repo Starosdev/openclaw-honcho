@@ -61,6 +61,7 @@ export type HonchoConfig = {
   captureSystemRuns: boolean;
   ownerObserveOthers: boolean;
   crossSessionSearch: boolean;
+  enableMemoryCompatibilityTools: boolean;
   degradedFallback: DegradedFallbackConfig;
   antiHits: AntiHitsConfig;
   recall: RecallConfig;
@@ -134,6 +135,7 @@ export const honchoConfigSchema = {
       captureSystemRuns: cfg.captureSystemRuns === true,
       ownerObserveOthers: typeof cfg.ownerObserveOthers === "boolean" ? cfg.ownerObserveOthers : false,
       crossSessionSearch: typeof cfg.crossSessionSearch === "boolean" ? cfg.crossSessionSearch : true,
+      enableMemoryCompatibilityTools: cfg.enableMemoryCompatibilityTools === true,
       antiHits: (() => {
         const raw = (cfg.antiHits ?? {}) as Record<string, unknown>;
         const bounded = (value: unknown, fallback: number, minimum: number, maximum: number) =>

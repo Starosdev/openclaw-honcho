@@ -106,13 +106,15 @@ const honchoPlugin: OpenClawPluginDefinition = definePluginEntry({
     registerContextHook(api, state);
     registerCaptureHook(api, state);
 
-    // Tools (5 core + 2 passthrough)
+    // Core Honcho tools
     registerSessionTool(api, state);
     registerContextTool(api, state);
     registerSearchTool(api, state);
     registerAskTool(api, state);
     registerMessageSearchTool(api, state);
-    registerMemoryPassthrough(api, state);
+    if (state.cfg.enableMemoryCompatibilityTools) {
+      registerMemoryPassthrough(api, state);
+    }
 
     // CLI
     registerCli(api, state);
