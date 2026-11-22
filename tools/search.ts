@@ -73,7 +73,7 @@ export function registerSearchTool(api: OpenClawPluginApi, state: PluginState): 
                 text: `No memories found matching: "${query}"\n\nTry broadening your search or increasing maxDistance.`,
               },
             ],
-            details: { query, resultCount: 0 },
+            details: { query, resultCount: 0, representation: "" },
           };
         }
 
@@ -86,6 +86,7 @@ export function registerSearchTool(api: OpenClawPluginApi, state: PluginState): 
             query,
             resultCount: representation.split("\n").filter(Boolean).length,
             antiHitCount: antiHits.length,
+            representation,
           },
         };
       },

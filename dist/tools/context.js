@@ -32,7 +32,7 @@ export function registerContextTool(api, state) {
                                 text: "No profile facts available yet. The user's profile builds over time through conversations.",
                             },
                         ],
-                        details: { detail, factCount: 0 },
+                        details: { detail, factCount: 0, facts: [] },
                     };
                 }
                 return {
@@ -42,7 +42,7 @@ export function registerContextTool(api, state) {
                             text: `## User Profile\n\n${card.map((f) => `• ${f}`).join("\n")}`,
                         },
                     ],
-                    details: { detail, factCount: card.length },
+                    details: { detail, factCount: card.length, facts: card },
                 };
             }
             // detail === "full"
@@ -57,12 +57,12 @@ export function registerContextTool(api, state) {
                             text: "No context available yet. Context builds over time through conversations.",
                         },
                     ],
-                    details: { detail, representationLength: 0 },
+                    details: { detail, representationLength: 0, representation: "" },
                 };
             }
             return {
                 content: [{ type: "text", text: `## User Context\n\n${representation}` }],
-                details: { detail, representationLength: representation.length },
+                details: { detail, representationLength: representation.length, representation },
             };
         },
     }), { name: "honcho_context" });

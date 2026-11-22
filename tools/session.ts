@@ -74,50 +74,47 @@ export function registerSessionTool(api: OpenClawPluginApi, state: PluginState):
 
           const sections: string[] = [];
 
-          if (isOwner && includeSummary && context.summary?.content) {
+          const summary = isOwner && includeSummary ? context.summary?.content || null : null;
+          const peerCard = context.peerCard ?? [];
+          const representation = context.peerRepresentation || null;
+
+          if (summary) {
             sections.push(
-              `## Earlier Conversation Summary\n\n${context.summary.content}`
+              `## Earlier Conversation Summary\n\n${summary}`
             );
           }
 
-          if (context.peerCard?.length) {
+          if (peerCard.length) {
             sections.push(
-              `## User Profile\n\n${context.peerCard.map((f) => `• ${f}`).join("\n")}`
+              `## User Profile\n\n${peerCard.map((f) => `• ${f}`).join("\n")}`
             );
           }
 
-          if (context.peerRepresentation) {
+          if (representation) {
             sections.push(
-              `## User Context\n\n${context.peerRepresentation}`
+              `## User Context\n\n${representation}`
             );
           }
 
-          const visible = includeMessages
-            ? context.messages.filter((msg) => isOwner || msg.peerId === participantPeer.id)
+          const messages = includeMessages
+            ? context.messages
+                .filter((msg) => isOwner || msg.peerId === participantPeer.id)
+                .map((msg) => ({
+                  speaker: state.isParticipantPeerId(msg.peerId) ? "User" : "OpenClaw",
+                  createdAt: msg.createdAt ?? null,
+                  content: cleanMessageContent(msg.content as string),
+                }))
             : [];
-          if (visible.length > 0) {
-            const messageLines = visible.map((msg) => {
-              const speaker = state.isParticipantPeerId(msg.peerId) ? "User" : "OpenClaw";
+          if (messages.length > 0) {
+            const messageLines = messages.map((msg) => {
               const timestamp = msg.createdAt
                 ? new Date(msg.createdAt).toLocaleString()
                 : "";
-              return `**${speaker}**${timestamp ? ` (${timestamp})` : ""}:\n${cleanMessageContent(msg.content as string)}`;
+              return `**${msg.speaker}**${timestamp ? ` (${timestamp})` : ""}:\n${msg.content}`;
             });
             sections.push(
-              `## Recent Messages (${visible.length})\n\n${messageLines.join("\n\n---\n\n")}`
+              `## Recent Messages (${messages.length})\n\n${messageLines.join("\n\n---\n\n")}`
             );
-          }
-
-          if (sections.length === 0) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "No conversation history available for this session yet.",
-                },
-              ],
-              details: { messageCount: 0, hasSummary: false, sessionKey },
-            };
           }
 
           const searchNote = searchQuery
@@ -128,13 +125,19 @@ export function registerSessionTool(api: OpenClawPluginApi, state: PluginState):
             content: [
               {
                 type: "text",
-                text: sections.join("\n\n---\n\n") + searchNote,
+                text: sections.length
+                  ? sections.join("\n\n---\n\n") + searchNote
+                  : "No conversation history available for this session yet.",
               },
             ],
             details: {
-              messageCount: visible.length,
-              hasSummary: isOwner && includeSummary && !!context.summary?.content,
+              messageCount: messages.length,
+              hasSummary: summary !== null,
               sessionKey,
+              summary,
+              peerCard,
+              representation,
+              messages,
             },
           };
         } catch (error) {
@@ -151,7 +154,15 @@ export function registerSessionTool(api: OpenClawPluginApi, state: PluginState):
                   text: "No conversation history found. This appears to be a new session.",
                 },
               ],
-              details: { messageCount: 0, hasSummary: false, sessionKey },
+              details: {
+                messageCount: 0,
+                hasSummary: false,
+                sessionKey,
+                summary: null,
+                peerCard: [],
+                representation: null,
+                messages: [],
+              },
             };
           }
 

@@ -52,7 +52,7 @@ export function registerSearchTool(api, state) {
                             text: `No memories found matching: "${query}"\n\nTry broadening your search or increasing maxDistance.`,
                         },
                     ],
-                    details: { query, resultCount: 0 },
+                    details: { query, resultCount: 0, representation: "" },
                 };
             }
             const antiHitsBlock = formatAntiHits(antiHits);
@@ -63,6 +63,7 @@ export function registerSearchTool(api, state) {
                     query,
                     resultCount: representation.split("\n").filter(Boolean).length,
                     antiHitCount: antiHits.length,
+                    representation,
                 },
             };
         },
