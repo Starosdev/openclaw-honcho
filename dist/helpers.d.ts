@@ -18,6 +18,13 @@ export declare function isClawTalkSession(sessionKey?: string): boolean;
  * cannot drift from the routing-key DSL.
  */
 export declare function classifySession(sessionKey: string): SessionClass;
+export declare function isSystemRun(ctx: {
+    sessionKey?: string;
+    trigger?: string;
+    inputProvenance?: {
+        kind?: string;
+    };
+}): boolean;
 /**
  * Extract the channel/provider segment from a canonical OpenClaw sessionKey
  * (`agent:<agentId>:<provider>:...`). Returns null when the key does not match

@@ -47,6 +47,7 @@ export type HonchoConfig = {
     timeoutMs?: number;
     noisePatterns: string[];
     disableDefaultNoisePatterns: boolean;
+    captureSystemRuns: boolean;
     ownerObserveOthers: boolean;
     crossSessionSearch: boolean;
     degradedFallback: DegradedFallbackConfig;

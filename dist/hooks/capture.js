@@ -1,12 +1,51 @@
 import { OWNER_ID } from "../state.js";
-import { buildSessionKey, classifySession, isClawTalkSession, isSubagentSession, normalizeSessionKey, extractMessages, extractSenderId, getRawContent, } from "../helpers.js";
+import { buildSessionKey, classifySession, isClawTalkSession, isSystemRun, isSubagentSession, normalizeSessionKey, extractMessages, extractSenderId, getRawContent, } from "../helpers.js";
 import { subagentParentMap } from "./subagent.js";
+function systemMessageIndexes(messages, ctx) {
+    const entries = messages.map((message) => {
+        const row = message;
+        const userKey = row?.role === "user" && typeof row.idempotencyKey === "string" &&
+            row.idempotencyKey.endsWith(":user") ? row.idempotencyKey.slice(0, -5) : undefined;
+        return {
+            role: row?.role,
+            runId: row?.__openclaw?.runId || userKey,
+            isSystem: row?.provenance?.kind === "internal_system",
+        };
+    });
+    const systemRuns = new Set();
+    const humanRuns = new Set();
+    if (ctx.runId)
+        (isSystemRun(ctx) ? systemRuns : humanRuns).add(ctx.runId);
+    for (const entry of entries) {
+        if (!entry.runId)
+            continue;
+        if (entry.isSystem)
+            systemRuns.add(entry.runId);
+        else if (entry.role === "user")
+            humanRuns.add(entry.runId);
+    }
+    const indexes = new Set();
+    let systemTurn = false;
+    let userRunId;
+    for (const [index, entry] of entries.entries()) {
+        const isSystem = entry.isSystem || (entry.runId !== undefined && systemRuns.has(entry.runId));
+        if (entry.role === "user") {
+            systemTurn = isSystem;
+            userRunId = entry.runId;
+        }
+        // Explicit run ownership wins over adjacency for interleaved replies.
+        if (isSystem || (systemTurn && (!entry.runId || (!userRunId && !humanRuns.has(entry.runId))))) {
+            indexes.add(index);
+        }
+    }
+    return indexes;
+}
 /**
  * Core message capture logic shared by agent_end, before_compaction, and before_reset.
  * Returns the number of new messages saved (or 0 if none).
  * Exported for testability.
  */
-export async function flushMessages(api, state, messages, ctx) {
+export async function flushMessages(api, state, messages, ctx, preservePendingHistory = false) {
     if (!messages?.length)
         return 0;
     const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
@@ -15,6 +54,14 @@ export async function flushMessages(api, state, messages, ctx) {
     const parentAgentId = isSubagent ? subagentParentMap.get(ctx.sessionKey ?? "") : undefined;
     const openclawSessionKey = normalizeSessionKey(ctx.sessionKey);
     const sessionClass = classifySession(openclawSessionKey);
+    const filterSystemRuns = !state.cfg.captureSystemRuns;
+    const systemRun = filterSystemRuns && isSystemRun(ctx);
+    if (filterSystemRuns && (sessionClass === "cron" || (systemRun && !preservePendingHistory))) {
+        return 0;
+    }
+    const skipped = filterSystemRuns ? systemMessageIndexes(messages, ctx) : undefined;
+    if (skipped?.size === messages.length)
+        return 0;
     await state.ensureInitialized();
     const agentPeer = await state.getAgentPeer(agentId);
     const parentPeer = isSubagent && parentAgentId && parentAgentId !== agentId
@@ -43,7 +90,9 @@ export async function flushMessages(api, state, messages, ctx) {
     // Gateway chat.send uses its run ID as MessageSid and persists the user
     // entry with a run-scoped idempotency key. Prompt rebuilds may already
     // include this entry, and the inbound hook may have run elsewhere.
-    const runId = ctx.runId;
+    // A lifecycle flush can save human history while a system run is active.
+    // Its run and source IDs must never be applied to those human rows.
+    const runId = systemRun ? undefined : ctx.runId;
     const isClawTalk = isClawTalkSession(openclawSessionKey);
     const clawTalkUserIndex = runId && isClawTalk
         ? messages.findIndex((message) => {
@@ -53,8 +102,10 @@ export async function flushMessages(api, state, messages, ctx) {
         : -1;
     const turnStartIndex = clawTalkUserIndex >= 0
         ? clawTalkUserIndex
-        : Math.min(Math.max(state.turnStartIndex.get(sessionKey) ?? 0, 0), messages.length);
-    const sourceMessageId = clawTalkUserIndex >= 0 ? runId : ctx.sourceMessageId;
+        : skipped?.size
+            ? 0
+            : Math.min(Math.max(state.turnStartIndex.get(sessionKey) ?? 0, 0), messages.length);
+    const sourceMessageId = clawTalkUserIndex >= 0 ? runId : systemRun ? undefined : ctx.sourceMessageId;
     const rawLastSavedIndex = typeof existingMeta.lastSavedIndex === "number" ? existingMeta.lastSavedIndex : 0;
     const lastSavedIndex = Math.min(Math.max(rawLastSavedIndex, 0), messages.length);
     const startIndex = Math.max(turnStartIndex, lastSavedIndex);
@@ -68,11 +119,13 @@ export async function flushMessages(api, state, messages, ctx) {
             size: 1,
         });
         alreadyCaptured = existing.items.length > 0;
-        if (!alreadyCaptured && clawTalkUserIndex < startIndex) {
+        if (!alreadyCaptured && !skipped?.has(clawTalkUserIndex) && clawTalkUserIndex < startIndex) {
             pending.push({ message: messages[clawTalkUserIndex], rawIndex: clawTalkUserIndex });
         }
     }
     for (let rawIndex = startIndex; rawIndex < messages.length; rawIndex++) {
+        if (skipped?.has(rawIndex))
+            continue;
         if (rawIndex === clawTalkUserIndex && alreadyCaptured)
             continue;
         pending.push({ message: messages[rawIndex], rawIndex });
@@ -172,10 +225,10 @@ export async function flushMessages(api, state, messages, ctx) {
         const [message] = extractMessages([rawMessage], participantPeer, agentPeer, state.cfg.noisePatterns, undefined, isSourceUser && sourceMessageId
             ? {
                 openclawMessageId: sourceMessageId,
-                ...(ctx.runId ? { openclawRunId: ctx.runId } : {}),
+                ...(runId ? { openclawRunId: runId } : {}),
             }
-            : offset === lastAssistantOffset && ctx.runId
-                ? { openclawRunId: ctx.runId }
+            : offset === lastAssistantOffset && runId
+                ? { openclawRunId: runId }
                 : undefined);
         if (message)
             extracted.push({ message, rawIndex });
@@ -217,13 +270,13 @@ export function registerCaptureHook(api, state) {
     const pendingSourceMessageIdsBySession = new Map();
     const flushesBySession = new Map();
     // Compaction and reset can advance lastSavedIndex before agent_end runs.
-    const flushCapturedMessages = (messages, ctx) => {
+    const flushCapturedMessages = (messages, ctx, preservePendingHistory = false) => {
         const sourceMessageId = ctx.runId ? sourceMessageIdsByRun.get(ctx.runId) : undefined;
         const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
         const sessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId });
         const previous = flushesBySession.get(sessionKey);
         // Detached agent_end and compaction hooks can overlap on the same cursor.
-        const current = Promise.resolve(previous).catch(() => undefined).then(() => flushMessages(api, state, messages, { ...ctx, agentId, sourceMessageId }));
+        const current = Promise.resolve(previous).catch(() => undefined).then(() => flushMessages(api, state, messages, { ...ctx, agentId, sourceMessageId }, preservePendingHistory));
         flushesBySession.set(sessionKey, current);
         return current.finally(() => {
             if (flushesBySession.get(sessionKey) === current)
@@ -231,6 +284,8 @@ export function registerCaptureHook(api, state) {
         });
     };
     api.on("message_received", (event, ctx) => {
+        if (!state.cfg.captureSystemRuns && isSystemRun(ctx))
+            return;
         const runId = event.runId ?? ctx.runId;
         const messageId = event.messageId ?? ctx.messageId;
         // message_received can predate runId; bind this ID when before_prompt_build supplies it.
@@ -244,6 +299,8 @@ export function registerCaptureHook(api, state) {
         }
     });
     api.on("before_prompt_build", (_event, ctx) => {
+        if (!state.cfg.captureSystemRuns && isSystemRun(ctx))
+            return;
         if (!ctx.runId || !ctx.sessionKey)
             return;
         const messageId = pendingSourceMessageIdsBySession.get(ctx.sessionKey);
@@ -257,6 +314,11 @@ export function registerCaptureHook(api, state) {
      */
     api.on("agent_end", async (event, ctx) => {
         const runId = event.runId ?? ctx.runId;
+        if (!state.cfg.captureSystemRuns && isSystemRun(ctx)) {
+            if (runId)
+                sourceMessageIdsByRun.delete(runId);
+            return;
+        }
         if (!event.success || !event.messages?.length) {
             if (runId)
                 sourceMessageIdsByRun.delete(runId);
@@ -299,7 +361,7 @@ export function registerCaptureHook(api, state) {
         if (!event.messages?.length)
             return;
         try {
-            const saved = await flushCapturedMessages(event.messages, ctx);
+            const saved = await flushCapturedMessages(event.messages, ctx, true);
             if (saved > 0) {
                 api.logger.debug?.(`[honcho] Flushed ${saved} messages before compaction`);
             }
@@ -315,7 +377,7 @@ export function registerCaptureHook(api, state) {
     api.on("before_reset", async (event, ctx) => {
         try {
             if (event.messages?.length) {
-                const saved = await flushCapturedMessages(event.messages, ctx);
+                const saved = await flushCapturedMessages(event.messages, ctx, true);
                 if (saved > 0) {
                     api.logger.debug?.(`[honcho] Flushed ${saved} messages before session reset`);
                 }

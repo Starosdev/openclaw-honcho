@@ -82,6 +82,7 @@ export const honchoConfigSchema = {
             })(),
             noisePatterns,
             disableDefaultNoisePatterns,
+            captureSystemRuns: cfg.captureSystemRuns === true,
             ownerObserveOthers: typeof cfg.ownerObserveOthers === "boolean" ? cfg.ownerObserveOthers : false,
             crossSessionSearch: typeof cfg.crossSessionSearch === "boolean" ? cfg.crossSessionSearch : true,
             antiHits: (() => {
