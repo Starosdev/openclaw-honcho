@@ -24,6 +24,7 @@ import { registerContextTool } from "./tools/context.js";
 import { registerAskTool } from "./tools/ask.js";
 import { registerMemoryPassthrough } from "./tools/memory-passthrough.js";
 import { registerMessageSearchTool } from "./tools/message-search.js";
+import { registerWorkspaceChatTool } from "./tools/workspace-chat.js";
 import { registerCli } from "./commands/cli.js";
 import { createHonchoMemoryRuntime } from "./runtime.js";
 
@@ -114,6 +115,9 @@ const honchoPlugin: OpenClawPluginDefinition = definePluginEntry({
     registerMessageSearchTool(api, state);
     if (state.cfg.enableMemoryCompatibilityTools) {
       registerMemoryPassthrough(api, state);
+    }
+    if (state.cfg.enableWorkspaceChat) {
+      registerWorkspaceChatTool(api, state);
     }
 
     // CLI

@@ -56,6 +56,7 @@ export type HonchoConfig = HonchoConnection & {
     ownerObserveOthers: boolean;
     crossSessionSearch: boolean;
     enableMemoryCompatibilityTools: boolean;
+    enableWorkspaceChat: boolean;
     degradedFallback: DegradedFallbackConfig;
     antiHits: AntiHitsConfig;
     recall: RecallConfig;

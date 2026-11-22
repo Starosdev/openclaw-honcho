@@ -72,6 +72,7 @@ export type HonchoConfig = HonchoConnection & {
   ownerObserveOthers: boolean;
   crossSessionSearch: boolean;
   enableMemoryCompatibilityTools: boolean;
+  enableWorkspaceChat: boolean;
   degradedFallback: DegradedFallbackConfig;
   antiHits: AntiHitsConfig;
   recall: RecallConfig;
@@ -202,6 +203,7 @@ export const honchoConfigSchema = {
       ownerObserveOthers: typeof cfg.ownerObserveOthers === "boolean" ? cfg.ownerObserveOthers : false,
       crossSessionSearch: typeof cfg.crossSessionSearch === "boolean" ? cfg.crossSessionSearch : true,
       enableMemoryCompatibilityTools: cfg.enableMemoryCompatibilityTools === true,
+      enableWorkspaceChat: cfg.enableWorkspaceChat === true,
       antiHits: (() => {
         const raw = (cfg.antiHits ?? {}) as Record<string, unknown>;
         const bounded = (value: unknown, fallback: number, minimum: number, maximum: number) =>
