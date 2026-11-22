@@ -218,6 +218,26 @@ function createState(baseUrl = "https://api.honcho.dev", { crossSessionSearch = 
 }
 
 describe("Honcho memory runtime", () => {
+  it.each(["search", "read"] as const)("preserves the persisted capture checkpoint during session %s", async (operation) => {
+    const state = createState("http://localhost:8000", { crossSessionSearch: false });
+    const checkpoint = { lastSavedMessageId: "k:turn:user", lastSavedIndex: 3, participantSenderId: "alice" };
+    let metadata: Record<string, unknown> = { ...checkpoint };
+    const getSession = vi.mocked(state.honcho.session).getMockImplementation()!;
+    vi.mocked(state.honcho.session).mockImplementation(async (key, options) => {
+      if (options?.metadata) metadata = options.metadata;
+      return getSession(key, options);
+    });
+    const { manager } = await getHonchoMemorySearchManager(state, { sessionKey: "session-1" });
+
+    if (operation === "search") {
+      expect(await manager.search("remember")).toHaveLength(1);
+    } else {
+      expect(await manager.readFile({ relPath: "sessions/session-1.txt" }))
+        .toMatchObject({ text: expect.stringContaining("Need to remember this") });
+    }
+    expect(metadata).toEqual(checkpoint);
+  });
+
   it("builds the unified memory capability runtime", async () => {
     const state = createState();
     const runtime = createHonchoMemoryRuntime(state);
