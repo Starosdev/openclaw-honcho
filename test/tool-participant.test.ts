@@ -47,6 +47,7 @@ function setup(defaultUnknownPolicy: "per-sender" | "owner" = "per-sender") {
   };
   let wsMeta: Record<string, unknown> = {};
   fake.honcho = {
+    http: { upload: vi.fn() },
     getMetadata: vi.fn(async () => wsMeta),
     setMetadata: vi.fn(async (m: Record<string, unknown>) => { wsMeta = m; }),
     peer: vi.fn(async (id: string) => {

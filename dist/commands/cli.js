@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
-import { Honcho } from "@honcho-ai/sdk";
+import { createHonchoClient } from "../honcho-client.js";
 import { OWNER_ID } from "../state.js";
 const MANIFEST_PATH = () => path.join(os.homedir(), ".openclaw", ".upload-manifest.json");
 function loadManifest() {
@@ -287,7 +287,7 @@ export function registerCli(api, state) {
                     return;
                 }
                 // Upload files to Honcho
-                const setupHoncho = new Honcho({
+                const setupHoncho = createHonchoClient({
                     apiKey: resolvedApiKey || undefined,
                     baseURL: resolvedBaseUrl,
                     workspaceId: resolvedWorkspaceId,

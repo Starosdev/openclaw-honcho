@@ -4,11 +4,12 @@
  * PluginState object that gets passed to every module.
  */
 
-import { Honcho, type Peer } from "@honcho-ai/sdk";
+import type { Honcho, Peer } from "@honcho-ai/sdk";
 // @ts-ignore - resolved by openclaw runtime
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { honchoConfigSchema, type HonchoConfig } from "./config.js";
 import { isClawTalkSession } from "./helpers.js";
+import { createHonchoClient } from "./honcho-client.js";
 import {
   PeersPersister,
   loadPeersFileSync,
@@ -91,7 +92,7 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
     );
   }
 
-  const honcho = new Honcho({
+  const honcho = createHonchoClient({
     apiKey: cfg.apiKey,
     baseURL: cfg.baseUrl,
     workspaceId: cfg.workspaceId,

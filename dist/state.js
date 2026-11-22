@@ -3,9 +3,9 @@
  * Follows the dependency-injection pattern: createPluginState() returns a
  * PluginState object that gets passed to every module.
  */
-import { Honcho } from "@honcho-ai/sdk";
 import { honchoConfigSchema } from "./config.js";
 import { isClawTalkSession } from "./helpers.js";
+import { createHonchoClient } from "./honcho-client.js";
 import { PeersPersister, loadPeersFileSync, resolvePeersFilePath, resolveParticipantPeerId, } from "./peers.js";
 export const OWNER_ID = "owner";
 export const LEGACY_PEER_ID = "openclaw";
@@ -31,7 +31,7 @@ export function createPluginState(api) {
     if (!cfg.apiKey && !selfHosted) {
         api.logger.warn("openclaw-honcho: No API key configured. Set HONCHO_API_KEY or configure apiKey in plugin config.");
     }
-    const honcho = new Honcho({
+    const honcho = createHonchoClient({
         apiKey: cfg.apiKey,
         baseURL: cfg.baseUrl,
         workspaceId: cfg.workspaceId,

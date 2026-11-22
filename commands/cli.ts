@@ -3,9 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
-import { Honcho } from "@honcho-ai/sdk";
 // @ts-ignore - resolved by openclaw runtime
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { createHonchoClient } from "../honcho-client.js";
 import type { PluginState } from "../state.js";
 import { OWNER_ID } from "../state.js";
 
@@ -312,7 +312,7 @@ export function registerCli(api: OpenClawPluginApi, state: PluginState): void {
             }
 
             // Upload files to Honcho
-            const setupHoncho = new Honcho({
+            const setupHoncho = createHonchoClient({
               apiKey: resolvedApiKey || undefined,
               baseURL: resolvedBaseUrl,
               workspaceId: resolvedWorkspaceId,
