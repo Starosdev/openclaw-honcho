@@ -60,6 +60,7 @@ export type HonchoConfig = HonchoConnection & {
     antiHits: AntiHitsConfig;
     recall: RecallConfig;
 };
+export declare function assertRetainedHonchoEndpoint(original: string, selected: string): void;
 export declare function resolveHonchoConnection(value: unknown): HonchoConnection;
 export declare const honchoConfigSchema: {
     parse(value: unknown): HonchoConfig;
