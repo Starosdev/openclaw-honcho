@@ -43,34 +43,60 @@ export type ToolRequester = {
   senderIsOwner?: boolean;
 };
 
-/** Retain owner protection across config changes and setup uploads in this workspace. */
+const OWNER_POLICY_SESSION_ID = "openclaw-owner-policy";
+
+async function readWorkspaceOwnerIds(honcho: Honcho): Promise<Set<string>> {
+  const ownerPeerIds = new Set([DEFAULT_OWNER_PEER_ID]);
+  const workspace = encodeURIComponent(honcho.workspaceId);
+  const path = `/v3/workspaces/${workspace}/sessions/${OWNER_POLICY_SESSION_ID}/peers`;
+  for (let page = 1; ; page++) {
+    try {
+      const result = await honcho.http.get<{ items: Array<{ id: string }>; pages: number }>(
+        path, { query: { page } },
+      );
+      if (!Number.isSafeInteger(result.pages) || result.pages < 0) {
+        throw new Error("Invalid Honcho owner policy pagination.");
+      }
+      for (const peer of result.items) ownerPeerIds.add(peer.id);
+      if (page >= result.pages) return ownerPeerIds;
+    } catch (error) {
+      if (page === 1 && error instanceof Error && error.name === "NotFoundError") {
+        return ownerPeerIds;
+      }
+      throw error;
+    }
+  }
+}
+
+/** Persist protected owner IDs through additive membership, apart from workspace metadata. */
 export async function resolveWorkspaceOwner(
   honcho: Honcho,
   peerName: string,
   metadata: Record<string, unknown>,
 ) {
-  const recorded = Array.isArray(metadata.openclawOwnerPeerIds)
-    ? metadata.openclawOwnerPeerIds.filter((id): id is string => typeof id === "string")
-    : [];
-  const ownerPeerIds = new Set([DEFAULT_OWNER_PEER_ID, ...recorded, peerName]);
+  const ownerPeerIds = await readWorkspaceOwnerIds(honcho);
   const agentPeerMap = (metadata.agentPeerMap as Record<string, string>) ?? {};
-  if (Object.values(agentPeerMap).some((id) => id !== DEFAULT_OWNER_PEER_ID && ownerPeerIds.has(id))) {
+  if (Object.values(agentPeerMap).some((id) => id !== DEFAULT_OWNER_PEER_ID &&
+      (ownerPeerIds.has(id) || id === peerName))) {
     throw new Error("Honcho owner peer is already assigned to an agent.");
   }
   const peer = await honcho.peer(peerName);
   if (peerName !== DEFAULT_OWNER_PEER_ID && peer.metadata?.agentId) {
     throw new Error("Honcho owner peer is already assigned to an agent.");
   }
-  const metadataPatch = peerName !== DEFAULT_OWNER_PEER_ID && !recorded.includes(peerName)
-    ? { openclawOwnerPeerIds: [...ownerPeerIds] }
-    : {};
-  return { peer, ownerPeerIds, metadataPatch };
+  if (!ownerPeerIds.has(peerName)) {
+    const policy = await honcho.session(OWNER_POLICY_SESSION_ID);
+    await policy.addPeers([peer, { observeMe: false, observeOthers: false }]);
+    ownerPeerIds.add(peerName);
+  }
+  return { peer, ownerPeerIds };
 }
 
 export type PluginState = {
   honcho: Honcho;
   cfg: HonchoConfig;
   ownerPeerIds: ReadonlySet<string>;
+  refreshOwnerProtection: () => Promise<void>;
   /** Cache of resolved participant peers, keyed by channel peer ID.
    * "Participant" intentionally generalizes over humans AND non-agent bots/agents in group
    * chats — anyone in the conversation who isn't the local OpenClaw agent peer. */
@@ -139,6 +165,7 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
     honcho,
     cfg,
     ownerPeerIds: new Set([DEFAULT_OWNER_PEER_ID, cfg.peerName]),
+    refreshOwnerProtection,
     participantPeers: new Map<string, Peer>(),
     agentPeers: new Map<string, Peer>(),
     agentPeerMap: {},
@@ -191,14 +218,19 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
       agentPeerMap[defaultId] = LEGACY_PEER_ID;
       agentMapChanged = true;
     }
-    if (agentMapChanged || owner.metadataPatch.openclawOwnerPeerIds) {
-      await honcho.setMetadata({ ...wsMeta, ...owner.metadataPatch, agentPeerMap });
+    if (agentMapChanged) {
+      await honcho.setMetadata({ ...wsMeta, agentPeerMap });
     }
 
     state.agentPeerMap = agentPeerMap;
     state.ownerPeerIds = owner.ownerPeerIds;
     ownerPeer = owner.peer;
     state.initialized = true;
+  }
+
+  async function refreshOwnerProtection(): Promise<void> {
+    const recorded = await readWorkspaceOwnerIds(honcho);
+    state.ownerPeerIds = new Set([...state.ownerPeerIds, ...recorded]);
   }
 
   async function getParticipantPeer(channelPeerId?: string): Promise<Peer> {
@@ -287,6 +319,9 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
     // requester for this run, the same sender capture will attribute it to.
     const senderId = requester.requesterSenderId?.trim();
     if (isClawTalkSession(requester.sessionKey)) return getClawTalkParticipantPeer(senderId);
+    await ensureInitialized();
+    await refreshOwnerProtection();
+    if (requester.senderIsOwner === true && state.ownerPeerIds.size > 1) return ownerPeer;
     if (senderId) {
       const peer = await getParticipantPeer(senderId);
       if (!state.ownerPeerIds.has(peer.id) || requester.senderIsOwner === true) return peer;

@@ -184,6 +184,7 @@ function createState(baseUrl = "https://api.honcho.dev", { crossSessionSearch = 
 
   const state = {
     ownerPeerIds: new Set(["owner"]),
+    refreshOwnerProtection: vi.fn(async () => {}),
     cfg: {
       workspaceId: "openclaw",
       baseUrl,
@@ -271,6 +272,20 @@ describe("Honcho memory runtime", () => {
     });
 
     expect(result).toMatchObject({ manager: null, error: expect.stringContaining("verified requester") });
+    expect(state.honcho.session).not.toHaveBeenCalled();
+  });
+
+  it("revokes a retained native manager when a custom owner is registered", async () => {
+    const state = createState();
+    const { manager } = await createHonchoMemoryRuntime(state).getMemorySearchManager({
+      cfg: {} as never, agentId: "main",
+    });
+    vi.mocked(state.refreshOwnerProtection).mockImplementation(async () => {
+      state.ownerPeerIds = new Set(["owner", "vega-owner"]);
+    });
+
+    await expect(manager.search("owner memory")).rejects.toThrow("verified owner");
+    await expect(manager.readFile({ relPath: "sessions/session-1.txt" })).rejects.toThrow("verified owner");
     expect(state.honcho.session).not.toHaveBeenCalled();
   });
 

@@ -46,8 +46,13 @@ function setup(defaultUnknownPolicy: "per-sender" | "owner" = "per-sender", peer
     })),
   };
   let wsMeta: Record<string, unknown> = {};
+  const protectedPeers = new Set<string>();
   fake.honcho = {
-    http: { upload: vi.fn() },
+    workspaceId: "fixture",
+    http: {
+      upload: vi.fn(),
+      get: vi.fn(async () => ({ pages: 1, items: [...protectedPeers].map((id) => ({ id })) })),
+    },
     getMetadata: vi.fn(async () => wsMeta),
     setMetadata: vi.fn(async (m: Record<string, unknown>) => { wsMeta = m; }),
     peer: vi.fn(async (id: string) => {
@@ -56,7 +61,9 @@ function setup(defaultUnknownPolicy: "per-sender" | "owner" = "per-sender", peer
       return p;
     }),
     peers: vi.fn(async () => [...peers.values()]),
-    session: vi.fn(async () => session),
+    session: vi.fn(async (id: string) => id === "openclaw-owner-policy" ? {
+      addPeers: async ([peer]: [{ id: string }]) => { protectedPeers.add(peer.id); },
+    } : session),
     search: vi.fn(async () => []),
   };
   writeFileSync(
@@ -184,16 +191,24 @@ describe("tools read the requester's own memory", () => {
 
   it("denies non-owner aliases to the original custom peer after rollback or rotation", async () => {
     const { state, createState, session } = setup("owner", "vega-owner");
+    const alreadyRunning = createState();
+    await alreadyRunning.ensureInitialized();
     await state.ensureInitialized();
     expect((await state.getParticipantPeer("555")).id).toBe("owner");
 
-    for (const peerName of [undefined, "rotated-owner"]) {
-      const restarted = createState(peerName);
-      const history = tool(registerSessionTool, restarted, {
+    // An unrelated metadata replacement cannot erase the protected peer list.
+    await state.honcho.setMetadata({ agentPeerMap: { main: "agent-main" } });
+    for (const runtime of [alreadyRunning, createState(), createState("rotated-owner")]) {
+      const history = tool(registerSessionTool, runtime, {
         sessionKey: GROUP_KEY, requesterSenderId: "333",
       });
       await expect(history.execute("id", {})).rejects.toThrow("verified owner");
     }
     expect(session.context).not.toHaveBeenCalled();
+
+    const verifiedChannelOwner = await state.resolveToolParticipantPeer({
+      sessionKey: GROUP_KEY, requesterSenderId: "111", senderIsOwner: true,
+    });
+    expect(verifiedChannelOwner.id).toBe("vega-owner");
   });
 });

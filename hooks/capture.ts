@@ -124,6 +124,7 @@ export async function flushMessages(
   if (skipped?.size === messages.length) return 0;
 
   await state.ensureInitialized();
+  await state.refreshOwnerProtection();
   const guardedOwner = state.ownerPeerIds.size > 1;
   const agentPeer = await state.getAgentPeer(agentId);
   const parentPeer =

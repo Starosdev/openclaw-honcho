@@ -21,6 +21,7 @@ export function registerContextHook(api, state) {
             return;
         try {
             await state.ensureInitialized();
+            await state.refreshOwnerProtection();
             const guardedOwner = state.ownerPeerIds.size > 1;
             const agentPeer = await state.getAgentPeer(agentId);
             // Capture has not run yet, so session metadata can name the prior speaker.
@@ -92,6 +93,9 @@ export function registerContextHook(api, state) {
                 sections.push(`Earlier in this conversation:\n${summary}`);
             }
             if (sections.length === 0)
+                return;
+            await state.refreshOwnerProtection();
+            if (state.ownerPeerIds.size > 1 && (!guardedOwner || state.ownerPeerIds.has(participantPeer.id)))
                 return;
             const formatted = sections.join("\n\n");
             // Use appendSystemContext instead of systemPrompt to avoid overriding

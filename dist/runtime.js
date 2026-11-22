@@ -127,10 +127,19 @@ export async function getHonchoMemorySearchManager(state, params = {}) {
         ? await state.resolveToolParticipantPeer(params.requester)
         : undefined;
     const restrictedPeer = params.requester?.senderIsOwner === true ? undefined : requesterPeer;
+    const assertReadAllowed = async () => {
+        if (params.requester?.senderIsOwner === true)
+            return;
+        await state.refreshOwnerProtection();
+        if (restrictedPeer ? state.ownerPeerIds.has(restrictedPeer.id) : state.ownerPeerIds.size > 1) {
+            throw new Error("Honcho owner memory requires a verified owner.");
+        }
+    };
     return {
         manager: {
             async search(query, opts = {}) {
                 await state.ensureInitialized();
+                await assertReadAllowed();
                 // The active-memory contract scopes per call (search opts.sessionKey);
                 // fall back to the key captured at manager creation for the legacy /
                 // passthrough-tool path.
@@ -168,7 +177,7 @@ export async function getHonchoMemorySearchManager(state, params = {}) {
                     filtered.push(msg);
                 }
                 const transcriptCache = new Map();
-                return Promise.all(filtered.map(async (msg) => {
+                const results = await Promise.all(filtered.map(async (msg) => {
                     const snippet = typeof msg.content === "string" ? msg.content : "";
                     let transcriptPromise = transcriptCache.get(msg.sessionId);
                     if (!transcriptPromise) {
@@ -186,8 +195,11 @@ export async function getHonchoMemorySearchManager(state, params = {}) {
                         source: "sessions",
                     };
                 }));
+                await assertReadAllowed();
+                return results;
             },
             async readFile(params) {
+                await assertReadAllowed();
                 const sessionId = parseSessionPath(params.relPath);
                 if (!sessionId) {
                     throw new Error(`Unsupported Honcho memory path: ${params.relPath}`);
@@ -196,6 +208,7 @@ export async function getHonchoMemorySearchManager(state, params = {}) {
                     throw new Error(`Requested Honcho memory path is outside the active session: ${params.relPath}`);
                 }
                 const transcript = await buildSessionTranscript(state, agentId, sessionId, restrictedPeer);
+                await assertReadAllowed();
                 return {
                     path: params.relPath,
                     text: sliceLines(transcript, params.from, params.lines),
@@ -243,6 +256,7 @@ export function createHonchoMemoryRuntime(state) {
             // This host entry point has no requester. Custom owner reads go
             // through the tools that carry verified requester identity.
             await state.ensureInitialized();
+            await state.refreshOwnerProtection();
             if (state.ownerPeerIds.size > 1) {
                 return { manager: null, error: "Honcho custom owner memory requires a verified requester." };
             }

@@ -79,6 +79,7 @@ export async function flushMessages(api, state, messages, ctx, preservePendingHi
     if (skipped?.size === messages.length)
         return 0;
     await state.ensureInitialized();
+    await state.refreshOwnerProtection();
     const guardedOwner = state.ownerPeerIds.size > 1;
     const agentPeer = await state.getAgentPeer(agentId);
     const parentPeer = isSubagent && parentAgentId && parentAgentId !== agentId

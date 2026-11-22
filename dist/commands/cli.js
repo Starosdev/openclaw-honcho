@@ -296,9 +296,6 @@ export function registerCli(api, state) {
                 });
                 const existingMeta = await setupHoncho.getMetadata();
                 const owner = await resolveWorkspaceOwner(setupHoncho, ownerPeerId, existingMeta);
-                if (owner.metadataPatch.openclawOwnerPeerIds) {
-                    await setupHoncho.setMetadata({ ...existingMeta, ...owner.metadataPatch });
-                }
                 const ownerPeerSetup = owner.peer;
                 const agentPeerSetupMap = new Map();
                 for (const agent of normalizedAgents) {

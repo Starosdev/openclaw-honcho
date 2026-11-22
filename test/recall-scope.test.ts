@@ -28,6 +28,7 @@ function mkState(recall: Record<string, unknown>) {
   const peer = { id: "owner" };
   const state = {
     ownerPeerIds: new Set(["owner"]),
+    refreshOwnerProtection: vi.fn(async () => {}),
     cfg: honchoConfigSchema.parse({ baseUrl: "http://x", recall }),
     honcho: { session: vi.fn(async (_key: string, options?: { metadata?: Record<string, unknown> }) => {
       if (options?.metadata) metadata = options.metadata;
