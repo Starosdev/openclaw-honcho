@@ -56,6 +56,12 @@ export function classifySession(sessionKey) {
         return "chat";
     return "unknown";
 }
+export function isSystemRun(ctx) {
+    return classifySession(normalizeSessionKey(ctx.sessionKey)) === "cron" ||
+        ctx.trigger === "cron" ||
+        ctx.trigger === "heartbeat" ||
+        ctx.inputProvenance?.kind === "internal_system";
+}
 /**
  * Extract the channel/provider segment from a canonical OpenClaw sessionKey
  * (`agent:<agentId>:<provider>:...`). Returns null when the key does not match

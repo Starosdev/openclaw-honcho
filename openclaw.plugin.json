@@ -51,6 +51,11 @@
         },
         "description": "Additional substring patterns to skip messages. Built-in defaults (HEARTBEAT_OK, cron reminders, etc.) always apply."
       },
+      "captureSystemRuns": {
+        "type": "boolean",
+        "default": false,
+        "description": "Allow automatic recall and capture for cron and heartbeat runs. Message noise filters still apply."
+      },
       "ownerObserveOthers": {
         "type": "boolean",
         "default": false,

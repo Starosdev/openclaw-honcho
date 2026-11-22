@@ -70,6 +70,20 @@ async function askArgs(
 }
 
 describe("recall boundaries are applied per path", () => {
+  it.each([false, true])("only opens Honcho for system recall when opted in (%s)", async (optIn) => {
+    const { state } = mkState({});
+    state.cfg.captureSystemRuns = honchoConfigSchema.parse(optIn ? { captureSystemRuns: true } : {}).captureSystemRuns;
+    let handler: ((event: unknown, context: unknown) => Promise<unknown>) | undefined;
+    registerContextHook({
+      on: (name: string, fn: never) => { if (name === "before_prompt_build") handler = fn; },
+      logger,
+    } as never, state);
+    const event = { prompt: "Synthetic health poll", messages: [] };
+    await handler?.(event, { ...ctx, trigger: "heartbeat" });
+    await handler?.(event, { ...ctx, sessionKey: "agent:main:cron:nightly:run:7" });
+    expect(state.honcho.session).toHaveBeenCalledTimes(optIn ? 2 : 0);
+  });
+
   it("recalls for alternating current senders in a shared group session", async () => {
     const { state, session } = mkState({});
     let handler: ((e: unknown, c: unknown) => Promise<unknown>) | undefined;

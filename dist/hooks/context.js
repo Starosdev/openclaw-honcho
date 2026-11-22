@@ -1,8 +1,10 @@
-import { buildSessionKey, extractSenderId, isClawTalkSession, isSubagentSession, peerRecallOptions, sessionRecallOptions, } from "../helpers.js";
+import { buildSessionKey, extractSenderId, isClawTalkSession, isSystemRun, isSubagentSession, peerRecallOptions, sessionRecallOptions, } from "../helpers.js";
 import { buildDegradedContext, isConnectionFailure } from "../degraded.js";
 export function registerContextHook(api, state) {
     api.on("before_prompt_build", async (event, ctx) => {
         if (!event.prompt || event.prompt.length < 5)
+            return;
+        if (!state.cfg.captureSystemRuns && isSystemRun(ctx))
             return;
         const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
         const sessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId });

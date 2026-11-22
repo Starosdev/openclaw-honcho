@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_NOISE_PATTERNS } from "../config.js";
+import { DEFAULT_NOISE_PATTERNS, honchoConfigSchema } from "../config.js";
 import { flushMessages, registerCaptureHook } from "../hooks/capture.js";
 import { buildSessionKey } from "../helpers.js";
 import type { PluginState } from "../state.js";
@@ -197,13 +197,19 @@ describe("flushMessages metadata", () => {
     {
       const { state, session } = createMockState();
       const api = { logger: loggerStub() } as never;
+      const cron = { sessionKey: "agent:main:cron:nightly:run:7", agentId: "main" };
+      const messages = [{ role: "user", content: "tick", timestamp: 1 }];
+      expect(await flushMessages(api, state, messages, cron)).toBe(0);
+      expect(state.honcho.session).not.toHaveBeenCalled();
+      state.cfg.captureSystemRuns = honchoConfigSchema.parse({ captureSystemRuns: true }).captureSystemRuns;
       await flushMessages(
         api,
         state,
-        [{ role: "user", content: "tick", timestamp: 1 }],
-        { sessionKey: "agent:main:cron:nightly:run:7", agentId: "main" },
+        messages,
+        cron,
       );
       expect(session.metadata.sessionClass).toBe("cron");
+      expect(session.addMessages).toHaveBeenCalledOnce();
     }
     {
       const { state, session } = createMockState();
@@ -236,6 +242,43 @@ describe("flushMessages metadata", () => {
 });
 
 describe("registerCaptureHook source IDs", () => {
+  it.each(["before_compaction", "before_reset", "agent_end"])("preserves pending human turns at %s after a heartbeat", async (hook) => {
+    const { state, session } = createMockState();
+    type Handler = (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown;
+    const handlers = new Map<string, Handler>();
+    registerCaptureHook({
+      logger: loggerStub(),
+      on: (name: string, handler: Handler) => handlers.set(name, handler),
+    } as never, state);
+    const ctx = { agentId: "main", sessionKey: "agent:main:discord:dm:user-1" };
+    session.metadata.lastSavedIndex = 1;
+    const messages = [
+      { role: "user", content: "Previously saved human input" },
+      { role: "user", content: "Pending human input", idempotencyKey: "human-1:user" },
+      {
+        role: "user", content: "Synthetic health poll", idempotencyKey: "heartbeat:user",
+        provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+      },
+      { role: "assistant", content: "Pending human reply", __openclaw: { runId: "human-1" } },
+      { role: "assistant", content: "Synthetic health reply", __openclaw: { runId: "heartbeat" } },
+    ];
+    state.turnStartIndex.set(buildSessionKey(ctx), messages.length - 2);
+
+    await handlers.get("agent_end")?.({ messages, success: true }, { ...ctx, runId: "heartbeat", trigger: "heartbeat" });
+    expect(state.honcho.session).not.toHaveBeenCalled();
+
+    await handlers.get(hook)?.({
+      messages: [...messages, { role: "user", content: "Next human input" }],
+      success: true,
+    }, hook === "before_compaction" ? { ...ctx, runId: "heartbeat", trigger: "heartbeat" } : ctx);
+    expect(session.addMessages).toHaveBeenCalledOnce();
+    expect(session.addMessages).toHaveBeenCalledWith([
+      { text: "Pending human input" },
+      { text: "Pending human reply" },
+      { text: "Next human input" },
+    ]);
+  });
+
   it("captures the exact ClawTalk user when the saved index belongs to an earlier message window", async () => {
     const { state, session } = createMockState();
     type Handler = (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown;
@@ -338,7 +381,17 @@ describe("registerCaptureHook source IDs", () => {
 });
 
 describe("flushMessages batching", () => {
-  it("drops synthetic heartbeat polls but preserves an attention-needed reply", async () => {
+  it("captures a marked heartbeat when explicitly opted in", async () => {
+    const { state, session } = createMockState();
+    state.cfg.captureSystemRuns = honchoConfigSchema.parse({ captureSystemRuns: true }).captureSystemRuns;
+    const input = { role: "user", content: "Health sweep", provenance: { kind: "internal_system" } };
+    await flushMessages({ logger: loggerStub() } as never, state, [input], {
+      sessionKey: "agent:main:main", trigger: "heartbeat",
+    });
+    expect(session.addMessages).toHaveBeenCalledWith([{ text: "Health sweep" }]);
+  });
+
+  it("filters legacy heartbeat boilerplate while preserving an unclassified reply", async () => {
     const { state, session } = createMockState();
     const api = { logger: loggerStub() } as never;
 
