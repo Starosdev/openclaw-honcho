@@ -128,17 +128,29 @@ export async function flushMessages(
 
   // Pre-resolve participant peers for all unique sender IDs in this batch
   const senderIds = new Set<string>();
+  const senderByIndex = new Map<number, string>();
   let lastSenderId = clawTalkPeer ? ctx.senderId : undefined;
   let userMsgCount = 0;
-  for (const { message: msg } of pending) {
+  for (const { message: msg, rawIndex } of pending) {
     if (!msg || typeof msg !== "object") continue;
-    const m = msg as Record<string, unknown>;
+    const m = msg as {
+      role?: string;
+      idempotencyKey?: string;
+      __openclaw?: { senderId?: unknown; runId?: unknown };
+    };
     if (m.role !== "user") continue;
     if (isClawTalk) continue;
     userMsgCount++;
     const rawContent = getRawContent(msg);
-    const senderId = extractSenderId(rawContent);
+    const persistedSenderId = m.__openclaw?.senderId;
+    // The hook sender belongs to one run, not to other rows in this snapshot.
+    const isCurrentTurn = runId &&
+      (m.idempotencyKey === `${runId}:user` || m.__openclaw?.runId === runId);
+    const senderId = (isCurrentTurn ? ctx.senderId : undefined) ||
+      (typeof persistedSenderId === "string" ? persistedSenderId : undefined) ||
+      extractSenderId(rawContent);
     if (senderId) {
+      senderByIndex.set(rawIndex, senderId);
       senderIds.add(senderId);
       lastSenderId = senderId;
     } else {
@@ -196,12 +208,14 @@ export async function flushMessages(
       : offset === lastUserOffset;
     const isClawTalkUser = isClawTalk && (rawMessage as { role?: unknown } | undefined)?.role === "user";
     if (isClawTalkUser && (rawIndex !== clawTalkUserIndex || !clawTalkPeer)) continue;
+    const senderId = senderByIndex.get(rawIndex);
+    const participantPeer = (senderId && resolvedPeers.get(senderId)) || defaultParticipantPeer;
     const [message] = extractMessages(
       [rawMessage],
-      defaultParticipantPeer,
+      participantPeer,
       agentPeer,
       state.cfg.noisePatterns,
-      (senderId) => isClawTalkUser ? undefined : resolvedPeers.get(senderId),
+      undefined,
       isSourceUser && sourceMessageId
         ? {
             openclawMessageId: sourceMessageId,
