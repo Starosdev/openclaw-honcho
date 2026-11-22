@@ -339,6 +339,14 @@ describe("registerCaptureHook source IDs", () => {
       { role: "assistant", content: "Reply " + senderId },
     ]);
 
+    alice.addMessages.mockRejectedValueOnce(new Error("Temporary first-write failure"));
+    await handlers.get("agent_end")?.({ messages, success: true }, {
+      ...ctx, channel: "telegram", senderId: "111",
+    });
+    expect(alice.addMessages).toHaveBeenCalledOnce();
+    expect(alice.metadata).not.toHaveProperty("lastSavedMessageId");
+    alice.addMessages.mockClear();
+
     await handlers.get(hook)?.({ messages }, ctx);
     await handlers.get(hook)?.({ messages: messages.slice(1) }, ctx);
 

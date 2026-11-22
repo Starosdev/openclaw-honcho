@@ -418,8 +418,10 @@ export function registerCaptureHook(api, state) {
                 pendingSourceMessageIdsBySession.delete(ctx.sessionKey);
             return;
         }
+        let flushCompleted = false;
         try {
             await flushCapturedMessages(event.messages, { ...ctx, runId });
+            flushCompleted = true;
         }
         catch (error) {
             api.logger.error(`[honcho] Failed to save messages to Honcho: ${error}`);
@@ -437,8 +439,12 @@ export function registerCaptureHook(api, state) {
                 sourceMessageIdsByRun.delete(runId);
             if (ctx.sessionKey)
                 pendingSourceMessageIdsBySession.delete(ctx.sessionKey);
-            const sessionKey = buildSessionKey(dmHookSessionContext(ctx, api.config), state.resolveDefaultAgentId);
-            state.turnStartIndex.delete(sessionKey);
+            const keyContext = dmHookSessionContext(ctx, api.config);
+            // A first DM write can fail before any durable checkpoint exists. Keep
+            // its prompt boundary so a lifecycle flush can retry safely.
+            if (flushCompleted || !resolveSharedDmKey(keyContext)) {
+                state.turnStartIndex.delete(buildSessionKey(keyContext, state.resolveDefaultAgentId));
+            }
             if (isSubagentSession(ctx))
                 subagentParentMap.delete(ctx.sessionKey ?? "");
         }
