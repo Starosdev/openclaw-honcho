@@ -1,6 +1,9 @@
 /**
  * Configuration schema and parsing for the Honcho memory plugin.
  */
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { DEFAULT_ANTI_HITS } from "./antihits.js";
 export const DEFAULT_NOISE_PATTERNS = [
     "HEARTBEAT_OK",
@@ -41,6 +44,58 @@ function resolveEnvVars(value) {
         return envValue;
     });
 }
+function httpOrigin(value) {
+    try {
+        const url = new URL(value);
+        if ((url.protocol === "https:" || url.protocol === "http:") && !url.username &&
+            !url.password && url.href === `${url.origin}/`) {
+            return url.origin;
+        }
+    }
+    catch {
+        // Avoid including an invalid endpoint that could itself contain credentials.
+    }
+    throw new Error("Shared Honcho credentials require a valid HTTP(S) origin.");
+}
+function loadSharedCredentials() {
+    let file;
+    try {
+        file = JSON.parse(readFileSync(join(homedir(), ".honcho", "config.json"), "utf8"));
+    }
+    catch {
+        throw new Error("Shared Honcho configuration is unavailable or invalid.");
+    }
+    const host = file?.hosts?.openclaw;
+    // A host override supplies a pair. Never inherit one half from the root.
+    const selected = host && (host.apiKey !== undefined || host.environmentUrl !== undefined) ? host : file;
+    if (typeof selected?.apiKey !== "string" || !selected.apiKey.trim() ||
+        typeof selected.environmentUrl !== "string" || !selected.environmentUrl.trim()) {
+        throw new Error("Shared Honcho credentials require an API key and endpoint in the same configuration scope.");
+    }
+    return { apiKey: selected.apiKey.trim(), baseUrl: httpOrigin(selected.environmentUrl) };
+}
+export function resolveHonchoConnection(value) {
+    const cfg = (value ?? {});
+    const apiKey = typeof cfg.apiKey === "string" && cfg.apiKey.length > 0
+        ? resolveEnvVars(cfg.apiKey)
+        : process.env.HONCHO_API_KEY;
+    const configuredEndpoint = typeof cfg.baseUrl === "string" && cfg.baseUrl.length > 0
+        ? cfg.baseUrl
+        : process.env.HONCHO_BASE_URL;
+    const workspaceId = typeof cfg.workspaceId === "string" && cfg.workspaceId.length > 0
+        ? cfg.workspaceId
+        : process.env.HONCHO_WORKSPACE_ID ?? "openclaw";
+    if (!apiKey && cfg.enableSharedConfigCredentials === true) {
+        const shared = loadSharedCredentials();
+        if (configuredEndpoint && httpOrigin(configuredEndpoint) !== shared.baseUrl) {
+            throw new Error("Shared Honcho credential endpoint conflicts with the configured endpoint.");
+        }
+        return { ...shared, workspaceId, sharedCredentials: true };
+    }
+    return {
+        apiKey, baseUrl: configuredEndpoint ?? "https://api.honcho.dev", workspaceId, sharedCredentials: false,
+    };
+}
 export const honchoConfigSchema = {
     parse(value) {
         const cfg = (value ?? {});
@@ -49,14 +104,7 @@ export const honchoConfigSchema = {
             /^(?:agent-|clawtalk-|openclaw$)/i.test(peerName)) {
             throw new Error("Honcho peerName must be a valid peer ID outside the agent and ClawTalk namespaces.");
         }
-        // Resolve API key with env var fallback
-        let apiKey;
-        if (typeof cfg.apiKey === "string" && cfg.apiKey.length > 0) {
-            apiKey = resolveEnvVars(cfg.apiKey);
-        }
-        else {
-            apiKey = process.env.HONCHO_API_KEY;
-        }
+        const connection = resolveHonchoConnection(cfg);
         const disableDefaultNoisePatterns = cfg.disableDefaultNoisePatterns === true;
         const userPatterns = Array.isArray(cfg.noisePatterns)
             ? cfg.noisePatterns
@@ -68,13 +116,7 @@ export const honchoConfigSchema = {
             ...new Set([...(disableDefaultNoisePatterns ? [] : DEFAULT_NOISE_PATTERNS), ...userPatterns]),
         ];
         return {
-            apiKey,
-            workspaceId: typeof cfg.workspaceId === "string" && cfg.workspaceId.length > 0
-                ? cfg.workspaceId
-                : process.env.HONCHO_WORKSPACE_ID ?? "openclaw",
-            baseUrl: typeof cfg.baseUrl === "string" && cfg.baseUrl.length > 0
-                ? cfg.baseUrl
-                : process.env.HONCHO_BASE_URL ?? "https://api.honcho.dev",
+            ...connection,
             timeoutMs: (() => {
                 if (typeof cfg.timeoutMs === "number" && Number.isFinite(cfg.timeoutMs) && cfg.timeoutMs > 0) {
                     return cfg.timeoutMs;
