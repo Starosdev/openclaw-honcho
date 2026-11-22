@@ -3,7 +3,7 @@
  * Follows the dependency-injection pattern: createPluginState() returns a
  * PluginState object that gets passed to every module.
  */
-import { Honcho, type Peer } from "@honcho-ai/sdk";
+import type { Honcho, Peer } from "@honcho-ai/sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { type HonchoConfig } from "./config.js";
 import { PeersPersister } from "./peers.js";
