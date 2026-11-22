@@ -10,7 +10,11 @@ const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
 function mkState(recall: Record<string, unknown>) {
   const session = {
-    context: vi.fn(async () => ({ peerCard: ["fact"], peerRepresentation: "rep", summary: undefined })),
+    context: vi.fn(async (_options?: { peerTarget: { id: string } }) => ({
+      peerCard: ["fact"],
+      peerRepresentation: "rep",
+      summary: undefined,
+    })),
     getMetadata: vi.fn(async () => ({})),
     setMetadata: vi.fn(async () => undefined),
   };
@@ -27,7 +31,7 @@ function mkState(recall: Record<string, unknown>) {
     turnStartIndex: new Map<string, number>(),
     ensureInitialized: vi.fn(async () => undefined),
     getAgentPeer: vi.fn(async () => agentPeer),
-    getParticipantPeer: vi.fn(async () => peer),
+    getParticipantPeer: vi.fn(async (senderId: string) => ({ id: senderId })),
     resolveSessionParticipantPeer: vi.fn(async () => peer),
     resolveToolParticipantPeer: vi.fn(async () => peer),
     resolveDefaultAgentId: vi.fn(() => "main"),
@@ -66,6 +70,39 @@ async function askArgs(
 }
 
 describe("recall boundaries are applied per path", () => {
+  it("recalls for alternating current senders in a shared group session", async () => {
+    const { state, session } = mkState({});
+    let handler: ((e: unknown, c: unknown) => Promise<unknown>) | undefined;
+    registerContextHook(
+      { on: (name: string, fn: never) => { if (name === "before_prompt_build") handler = fn; }, logger } as never,
+      state,
+    );
+    session.context.mockImplementation(async (options) => ({
+      peerCard: [],
+      peerRepresentation: `memory for ${options?.peerTarget.id}`,
+      summary: undefined,
+    }));
+    const group = { ...ctx, sessionKey: "agent:main:discord:group:shared" };
+    const event = (previousSenderId: string) => ({
+      prompt: [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        JSON.stringify({ sender_id: previousSenderId }),
+        "```",
+        "Normal group message",
+      ].join("\n"),
+      messages: [],
+    });
+    for (const [senderId, previousSenderId] of [["alice", "bob"], ["bob", "alice"], ["alice", "bob"]]) {
+      const result = await handler?.(event(previousSenderId), { ...group, senderId });
+      expect(result).toEqual({ appendSystemContext: expect.stringContaining(`memory for ${senderId}`) });
+      expect(result).toEqual({ appendSystemContext: expect.not.stringContaining(`memory for ${previousSenderId}`) });
+    }
+    await expect(handler?.(event("bob"), group)).resolves.toEqual({
+      appendSystemContext: expect.stringContaining("memory for bob"),
+    });
+  });
+
   it("reaches across the workspace by default, which is what a workspace is for", async () => {
     const args = await contextArgs({});
     expect(args.limitToSession).toBeUndefined();

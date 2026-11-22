@@ -13,11 +13,9 @@ export function registerContextHook(api, state) {
         try {
             await state.ensureInitialized();
             const agentPeer = await state.getAgentPeer(agentId);
-            // Prefer the sender of the current inbound message — capture has not
-            // run yet for this turn, so session metadata still reflects the previous
-            // speaker. In group chats this would otherwise build context against the
-            // prior participant's representation whenever the speaker changes.
-            const currentSenderId = isClawTalk ? ctx.senderId : extractSenderId(event.prompt);
+            // Capture has not run yet, so session metadata can name the prior speaker.
+            // Use prompt metadata only for hosts that omit the per-turn sender.
+            const currentSenderId = isClawTalk ? ctx.senderId : ctx.senderId || extractSenderId(event.prompt);
             const participantPeer = isClawTalk
                 ? await state.getClawTalkParticipantPeer(currentSenderId)
                 : currentSenderId
