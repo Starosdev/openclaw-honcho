@@ -1,6 +1,6 @@
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { OWNER_ID } from "../state.js";
-import { buildSessionKey, classifySession, isClawTalkSession, isSystemRun, isSubagentSession, normalizeSessionKey, extractMessages, extractSenderId, getRawContent, } from "../helpers.js";
+import { buildSessionKey, classifySession, isClawTalkSession, isSystemRun, isSubagentSession, normalizeSessionKey, extractMessages, extractSenderId, getMessageIdentity, getRawContent, } from "../helpers.js";
 import { subagentParentMap } from "./subagent.js";
 function systemMessageIndexes(messages, ctx) {
     const entries = messages.map((message) => {
@@ -109,7 +109,20 @@ export async function flushMessages(api, state, messages, ctx, preservePendingHi
     const sourceMessageId = clawTalkUserIndex >= 0 ? runId : systemRun ? undefined : ctx.sourceMessageId;
     const rawLastSavedIndex = typeof existingMeta.lastSavedIndex === "number" ? existingMeta.lastSavedIndex : 0;
     const lastSavedIndex = Math.min(Math.max(rawLastSavedIndex, 0), messages.length);
-    const startIndex = Math.max(turnStartIndex, lastSavedIndex);
+    const checkpoint = existingMeta.lastSavedMessageId;
+    let startIndex = Math.max(turnStartIndex, lastSavedIndex);
+    if (typeof checkpoint === "string" && checkpoint.length > 0) {
+        const hintedIndex = lastSavedIndex - 1;
+        // Stable keys are unique. For hash matches, use the earliest occurrence
+        // because identical message bodies can repeat within a snapshot.
+        const anchorIndex = checkpoint.startsWith("k:") &&
+            getMessageIdentity(messages[hintedIndex]) === checkpoint
+            ? hintedIndex
+            : messages.findIndex((message) => getMessageIdentity(message) === checkpoint);
+        // An absent anchor may mean a shorter or non-overlapping snapshot. Revisit
+        // it rather than treating a stale offset as proof the rows were saved.
+        startIndex = Math.max(anchorIndex + 1, clawTalkUserIndex);
+    }
     const pending = [];
     let alreadyCaptured = false;
     if (clawTalkUserIndex >= 0 && sourceMessageId && runId) {
@@ -261,13 +274,23 @@ export async function flushMessages(api, state, messages, ctx, preservePendingHi
     const updatedMeta = {
         ...existingMeta,
         ...sessionMeta,
-        lastSavedIndex: messages.length,
     };
     if (lastSenderId) {
         updatedMeta.participantSenderId = lastSenderId;
     }
+    const saveCheckpoint = async (index) => {
+        let lastSavedMessageId;
+        for (let rawIndex = index - 1; rawIndex >= 0 && !lastSavedMessageId; rawIndex--) {
+            lastSavedMessageId = getMessageIdentity(messages[rawIndex]);
+        }
+        await session.setMetadata({
+            ...updatedMeta,
+            lastSavedIndex: index,
+            ...(lastSavedMessageId ? { lastSavedMessageId } : {}),
+        });
+    };
     if (extracted.length === 0) {
-        await session.setMetadata(updatedMeta);
+        await saveCheckpoint(messages.length);
         state.invalidateSessionParticipantPeer?.(sessionKey);
         return 0;
     }
@@ -282,7 +305,7 @@ export async function flushMessages(api, state, messages, ctx, preservePendingHi
         const lastSavedIndex = isLastChunk
             ? messages.length
             : Math.max(startIndex, chunk[chunk.length - 1].rawIndex + 1);
-        await session.setMetadata({ ...updatedMeta, lastSavedIndex });
+        await saveCheckpoint(lastSavedIndex);
     }
     state.invalidateSessionParticipantPeer?.(sessionKey);
     return extracted.length;
