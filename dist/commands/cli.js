@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
-import { DEFAULT_OWNER_PEER_ID, resolveHonchoConnection } from "../config.js";
+import { assertRetainedHonchoEndpoint, DEFAULT_OWNER_PEER_ID, resolveHonchoConnection } from "../config.js";
 import { createHonchoClient } from "../honcho-client.js";
 import { resolveWorkspaceOwner } from "../state.js";
 const MANIFEST_PATH = () => path.join(os.homedir(), ".openclaw", ".upload-manifest.json");
@@ -33,25 +33,13 @@ export function registerCli(api, state) {
             .option("--reconfigure", "Force re-entry of all configuration values")
             .action(async (options) => {
             const ownerPeerId = state.cfg.peerName;
-            const configuredPath = process.env.OPENCLAW_CONFIG_PATH?.trim();
-            const configPath = configuredPath
-                ? path.resolve(configuredPath.replace(/^~(?=\/)/, os.homedir()))
-                : path.join(os.homedir(), ".openclaw", "openclaw.json");
-            const configDir = path.dirname(configPath);
-            // Load existing config to use as defaults
-            let config = {};
-            let canWriteConfig = true;
-            if (fs.existsSync(configPath)) {
-                try {
-                    config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-                    canWriteConfig = !!config && typeof config === "object" && !Array.isArray(config);
-                }
-                catch {
-                    canWriteConfig = false;
-                }
-            }
-            const existingPluginCfg = config?.plugins
-                ?.entries?.["openclaw-honcho"]?.config;
+            // @ts-ignore - resolved by OpenClaw runtime
+            const configRuntime = await import("openclaw/plugin-sdk/config-runtime");
+            const { snapshot, writeOptions } = await configRuntime.readConfigFileSnapshotForWrite();
+            if (!snapshot.valid)
+                throw new Error("Setup cannot use an invalid OpenClaw configuration.");
+            let savedConfig = snapshot.config;
+            const existingPluginCfg = savedConfig.plugins?.entries?.["openclaw-honcho"]?.config;
             const configured = (api.pluginConfig ?? existingPluginCfg ?? {});
             const saved = resolveHonchoConnection(configured);
             console.log("\nHoncho Setup\n");
@@ -68,48 +56,56 @@ export function registerCli(api, state) {
                     console.log("✓ Using existing configuration\n");
                 }
                 else {
-                    if (!canWriteConfig)
-                        throw new Error("Setup cannot update a configuration file that is not valid JSON.");
                     console.log('Press Enter to use the default shown in [brackets].\n');
                     const apiKeyPrompt = saved.apiKey ? "press Enter to keep configured key" : "press Enter for self-hosted mode";
                     const apiKeyInput = (await ask(`Honcho API key (${apiKeyPrompt}): `)).trim();
                     const baseUrlInput = (await ask(`Base URL [${saved.baseUrl}]: `)).trim();
                     const workspaceIdInput = (await ask(`Workspace ID [${saved.workspaceId}]: `)).trim();
+                    if (!apiKeyInput && saved.apiKey && baseUrlInput) {
+                        assertRetainedHonchoEndpoint(saved.baseUrl, baseUrlInput);
+                    }
                     connection = resolveHonchoConnection({
                         ...configured,
                         ...(apiKeyInput ? { apiKey: apiKeyInput } : {}),
                         baseUrl: baseUrlInput || saved.baseUrl,
                         workspaceId: workspaceIdInput || saved.workspaceId,
                     });
-                    // Write config
-                    if (!config.plugins)
-                        config.plugins = {};
-                    const pluginsSection = config.plugins;
-                    if (!pluginsSection.entries)
-                        pluginsSection.entries = {};
-                    const entriesSection = pluginsSection.entries;
-                    const existingEntry = entriesSection["openclaw-honcho"] ?? {};
-                    const pluginCfg = {
-                        ...(existingEntry.config ?? {}),
+                    const updatePluginConfig = (draft) => {
+                        const plugins = draft.plugins ??= {};
+                        const entries = plugins.entries ??= {};
+                        const entry = entries["openclaw-honcho"] ??= {};
+                        const pluginCfg = entry.config ??= {};
+                        if (apiKeyInput)
+                            pluginCfg.apiKey = apiKeyInput;
+                        if (baseUrlInput || !connection.sharedCredentials)
+                            pluginCfg.baseUrl = connection.baseUrl;
+                        pluginCfg.workspaceId = connection.workspaceId;
                     };
-                    if (apiKeyInput)
-                        pluginCfg.apiKey = apiKeyInput;
-                    if (baseUrlInput || !connection.sharedCredentials)
-                        pluginCfg.baseUrl = connection.baseUrl;
-                    pluginCfg.workspaceId = connection.workspaceId;
-                    entriesSection["openclaw-honcho"] = { ...existingEntry, config: pluginCfg };
-                    if (!fs.existsSync(configDir))
-                        fs.mkdirSync(configDir, { recursive: true });
-                    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+                    if (typeof configRuntime.mutateConfigFile === "function") {
+                        const updated = await configRuntime.mutateConfigFile({
+                            base: "source",
+                            baseHash: snapshot.hash,
+                            writeOptions,
+                            afterWrite: { mode: "none", reason: "Honcho CLI setup" },
+                            mutate: updatePluginConfig,
+                        });
+                        savedConfig = updated.nextConfig;
+                    }
+                    else {
+                        // Older supported hosts expose the snapshot reader and writer only.
+                        const latest = await configRuntime.readConfigFileSnapshotForWrite();
+                        if (latest.snapshot.path !== snapshot.path || latest.snapshot.raw !== snapshot.raw) {
+                            throw new Error("OpenClaw configuration changed during Honcho setup.");
+                        }
+                        const draft = structuredClone(latest.snapshot.resolved);
+                        updatePluginConfig(draft);
+                        await configRuntime.writeConfigFile(draft, latest.writeOptions);
+                        savedConfig = draft;
+                    }
                     console.log("\n✓ Configuration saved.");
                 }
                 const { apiKey: resolvedApiKey, baseUrl: resolvedBaseUrl, workspaceId: resolvedWorkspaceId } = connection;
                 // Resolve configured agents and their workspaces from config
-                let savedConfig = {};
-                try {
-                    savedConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-                }
-                catch { /* use empty */ }
                 const agentsList = Array.isArray(savedConfig?.agents?.list)
                     ? savedConfig.agents.list
                     : [];

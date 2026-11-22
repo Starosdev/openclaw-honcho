@@ -2,7 +2,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { honchoConfigSchema } from "../config.js";
+import { assertRetainedHonchoEndpoint, honchoConfigSchema } from "../config.js";
+
+it("binds a retained setup key to its HTTP origin", () => {
+  expect(() => assertRetainedHonchoEndpoint("https://example.invalid:443", "https://example.invalid/")).not.toThrow();
+  expect(() => assertRetainedHonchoEndpoint("https://example.invalid", "http://example.invalid"))
+    .toThrow("conflicts with the configured endpoint");
+});
 
 describe("shared Honcho credentials", () => {
   const optIn = { enableSharedConfigCredentials: true };

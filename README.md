@@ -86,7 +86,7 @@ Run `openclaw honcho setup` to configure interactively, or set values directly i
 
 Changing `peerName` leaves historical messages on their original peer. New custom-owner capture requires verified owner attribution. Use requester-aware tools such as `memory_search` and `memory_get` from a verified owner session. Honcho records protected owners as members of the workspace's message-free `openclaw-owner-policy` session. This preserves owner protection after you change or remove `peerName`, including for automatic prompt recall and requester-less memory lookup.
 
-Set `enableSharedConfigCredentials: true` to reuse an `apiKey` and `environmentUrl` from `~/.honcho/config.json`. Plugin configuration and `HONCHO_API_KEY` take priority. The root and `hosts.openclaw` each supply a complete pair. When the file supplies the key, any configured endpoint must match its HTTP(S) origin. Workspace selection remains in OpenClaw, and setup keeps the shared key in the shared file.
+Set `enableSharedConfigCredentials: true` to reuse an `apiKey` and `environmentUrl` from `~/.honcho/config.json`. Plugin configuration and `HONCHO_API_KEY` take priority. The root and `hosts.openclaw` each supply a complete pair. When the file supplies the key, the configured endpoint must match its HTTP(S) origin. Workspace selection remains in OpenClaw. Setup edits the active OpenClaw profile, keeps the shared key in the shared file, and requires a newly entered key to change the origin of an existing authenticated connection.
 | `recall` | `object` | see below | How far each recall path may reach. See [Recall Boundaries](#recall-boundaries). |
 
 ### Self-Hosted / Local Honcho
