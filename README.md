@@ -84,7 +84,7 @@ Run `openclaw honcho setup` to configure interactively, or set values directly i
 | `ownerObserveOthers`   | `boolean`  | `false`                    | Whether the owner peer observes agent messages in Honcho's social model. |
 | `peerName`             | `string`   | `owner`                    | Explicit owner peer ID in the Honcho workspace. Use it to reuse an owner peer from another integration. |
 
-Changing `peerName` leaves historical messages on their original peer. For a custom owner, use requester-aware tools such as `memory_search` and `memory_get` from a verified owner session. Automatic prompt recall and the requester-less memory runtime withhold custom owner memory.
+Changing `peerName` leaves historical messages on their original peer. New custom-owner capture requires verified owner attribution. Use requester-aware tools such as `memory_search` and `memory_get` from a verified owner session. Honcho records custom owner IDs in workspace metadata so automatic prompt recall and requester-less memory lookup keep those IDs protected after you change or remove `peerName`.
 | `recall` | `object` | see below | How far each recall path may reach. See [Recall Boundaries](#recall-boundaries). |
 
 ### Self-Hosted / Local Honcho

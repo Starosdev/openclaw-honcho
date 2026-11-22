@@ -183,6 +183,7 @@ function createState(baseUrl = "https://api.honcho.dev", { crossSessionSearch = 
   };
 
   const state = {
+    ownerPeerIds: new Set(["owner"]),
     cfg: {
       workspaceId: "openclaw",
       baseUrl,
@@ -262,7 +263,7 @@ describe("Honcho memory runtime", () => {
 
   it("denies custom owner reads through the native runtime without requester identity", async () => {
     const state = createState();
-    state.cfg.peerName = "vega-owner";
+    state.ownerPeerIds = new Set(["owner", "vega-owner"]);
 
     const result = await createHonchoMemoryRuntime(state).getMemorySearchManager({
       cfg: {} as never,

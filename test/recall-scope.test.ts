@@ -27,6 +27,7 @@ function mkState(recall: Record<string, unknown>) {
   };
   const peer = { id: "owner" };
   const state = {
+    ownerPeerIds: new Set(["owner"]),
     cfg: honchoConfigSchema.parse({ baseUrl: "http://x", recall }),
     honcho: { session: vi.fn(async (_key: string, options?: { metadata?: Record<string, unknown> }) => {
       if (options?.metadata) metadata = options.metadata;
@@ -77,7 +78,7 @@ async function askArgs(
 describe("recall boundaries are applied per path", () => {
   it("withholds custom and historical owner recall without verified owner context", async () => {
     const { state, session } = mkState({});
-    state.cfg.peerName = "vega-owner";
+    state.ownerPeerIds = new Set(["owner", "vega-owner"]);
     let handler: ((e: unknown, c: unknown) => Promise<unknown>) | undefined;
     registerContextHook(
       { on: (n: string, fn: never) => { if (n === "before_prompt_build") handler = fn; }, logger } as never,

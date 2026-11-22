@@ -67,8 +67,9 @@ function setup(defaultUnknownPolicy: "per-sender" | "owner" = "per-sender", peer
     } }),
   );
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  const state = createPluginState({ pluginConfig: { baseUrl: "http://x", peerName }, logger, config: {} } as never);
-  return { state, session, peers };
+  const createState = (name?: string) =>
+    createPluginState({ pluginConfig: { baseUrl: "http://x", peerName: name }, logger, config: {} } as never);
+  return { state: createState(peerName), createState, session, peers };
 }
 
 function tool(register: (api: never, state: PluginState) => void, state: PluginState, toolCtx: Record<string, unknown>) {
@@ -179,5 +180,20 @@ describe("tools read the requester's own memory", () => {
 
     await expect(state.ensureInitialized()).rejects.toThrow("already assigned to an agent");
     expect(peers.has("existing-agent-peer")).toBe(false);
+  });
+
+  it("denies non-owner aliases to the original custom peer after rollback or rotation", async () => {
+    const { state, createState, session } = setup("owner", "vega-owner");
+    await state.ensureInitialized();
+    expect((await state.getParticipantPeer("555")).id).toBe("owner");
+
+    for (const peerName of [undefined, "rotated-owner"]) {
+      const restarted = createState(peerName);
+      const history = tool(registerSessionTool, restarted, {
+        sessionKey: GROUP_KEY, requesterSenderId: "333",
+      });
+      await expect(history.execute("id", {})).rejects.toThrow("verified owner");
+    }
+    expect(session.context).not.toHaveBeenCalled();
   });
 });

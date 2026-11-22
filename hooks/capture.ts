@@ -2,6 +2,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import type { PluginState } from "../state.js";
+import { DEFAULT_OWNER_PEER_ID } from "../config.js";
 import {
   buildSessionKey,
   dmHookSessionContext,
@@ -123,6 +124,7 @@ export async function flushMessages(
   if (skipped?.size === messages.length) return 0;
 
   await state.ensureInitialized();
+  const guardedOwner = state.ownerPeerIds.size > 1;
   const agentPeer = await state.getAgentPeer(agentId);
   const parentPeer =
     isSubagent && parentAgentId && parentAgentId !== agentId
@@ -232,6 +234,7 @@ export async function flushMessages(
   // Pre-resolve participant peers for all unique sender IDs in this batch
   const senderIds = new Set<string>();
   const senderByIndex = new Map<number, string>();
+  const verifiedOwnerIndexes = new Set<number>();
   const sendingAgentByIndex = new Map<number, Awaited<ReturnType<typeof state.getAgentPeer>> | undefined>();
   let lastSenderId = clawTalkPeer ? ctx.senderId : undefined;
   let userMsgCount = 0;
@@ -241,7 +244,7 @@ export async function flushMessages(
       role?: string;
       idempotencyKey?: string;
       provenance?: CaptureProvenance;
-      __openclaw?: { senderId?: unknown; runId?: unknown };
+      __openclaw?: { senderId?: unknown; runId?: unknown; senderIsOwner?: unknown };
     };
     if (m.role !== "user") continue;
     if (isClawTalk) continue;
@@ -252,6 +255,10 @@ export async function flushMessages(
     const isCurrentTurn = runId &&
       (m.idempotencyKey === `${runId}:user` || m.__openclaw?.runId === runId);
     const provenance = m.provenance ?? (isCurrentTurn ? ctx.inputProvenance : undefined);
+    if (guardedOwner && m.__openclaw?.senderIsOwner === true &&
+        (!provenance || provenance.kind === "external_user")) {
+      verifiedOwnerIndexes.add(rawIndex);
+    }
     if (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") {
       const sourceAgentId = typeof provenance.sourceSessionKey === "string"
         ? parseAgentSessionKey(provenance.sourceSessionKey)?.agentId
@@ -284,7 +291,12 @@ export async function flushMessages(
     resolvedPeers.set(senderIdArray[i], peers[i]);
   }
 
-  const defaultParticipantPeer = clawTalkPeer ?? (isClawTalk ? agentPeer : await state.getParticipantPeer());
+  const defaultParticipantPeer = clawTalkPeer ?? (isClawTalk
+    ? agentPeer
+    : guardedOwner && state.cfg.peerName !== DEFAULT_OWNER_PEER_ID
+      ? await state.honcho.peer(DEFAULT_OWNER_PEER_ID)
+      : await state.getParticipantPeer());
+  const verifiedOwnerPeer = verifiedOwnerIndexes.size > 0 ? await state.getParticipantPeer() : undefined;
 
   // Build peer configs: default owner + all resolved participant peers + agent + parent
   const peerConfigMap = new Map<string, { observeMe: boolean; observeOthers: boolean }>();
@@ -294,8 +306,11 @@ export async function flushMessages(
   if (clawTalkPeer) {
     peerConfigMap.set(clawTalkPeer.id, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
   }
+  if (verifiedOwnerPeer) {
+    peerConfigMap.set(verifiedOwnerPeer.id, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
+  }
   for (const [, peer] of resolvedPeers) {
-    if (peer.id !== defaultParticipantPeer.id) {
+    if (peer.id !== defaultParticipantPeer.id && (!guardedOwner || !state.ownerPeerIds.has(peer.id))) {
       peerConfigMap.set(peer.id, { observeMe: true, observeOthers: state.cfg.ownerObserveOthers });
     }
   }
@@ -333,7 +348,10 @@ export async function flushMessages(
     const sendingAgentPeer = sendingAgentByIndex.get(rawIndex);
     if (sendingAgentByIndex.has(rawIndex) && !sendingAgentPeer) continue;
     const senderId = senderByIndex.get(rawIndex);
-    const participantPeer = sendingAgentPeer || (senderId && resolvedPeers.get(senderId)) || defaultParticipantPeer;
+    const mappedPeer = senderId ? resolvedPeers.get(senderId) : undefined;
+    const participantPeer = sendingAgentPeer ||
+      (verifiedOwnerIndexes.has(rawIndex) && verifiedOwnerPeer) ||
+      (mappedPeer && (!guardedOwner || !state.ownerPeerIds.has(mappedPeer.id)) ? mappedPeer : defaultParticipantPeer);
     const dmMessageId = dmKey ? sharedDmSourceMessageId(rawMessage) : undefined;
     const [message] = extractMessages(
       [rawMessage],

@@ -22,9 +22,20 @@ export type ToolRequester = {
     requesterSenderId?: string;
     senderIsOwner?: boolean;
 };
+/** Retain owner protection across config changes and setup uploads in this workspace. */
+export declare function resolveWorkspaceOwner(honcho: Honcho, peerName: string, metadata: Record<string, unknown>): Promise<{
+    peer: Peer;
+    ownerPeerIds: Set<string>;
+    metadataPatch: {
+        openclawOwnerPeerIds: string[];
+    } | {
+        openclawOwnerPeerIds?: undefined;
+    };
+}>;
 export type PluginState = {
     honcho: Honcho;
     cfg: HonchoConfig;
+    ownerPeerIds: ReadonlySet<string>;
     /** Cache of resolved participant peers, keyed by channel peer ID.
      * "Participant" intentionally generalizes over humans AND non-agent bots/agents in group
      * chats — anyone in the conversation who isn't the local OpenClaw agent peer. */

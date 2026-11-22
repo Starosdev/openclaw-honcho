@@ -6,7 +6,6 @@ import type { DegradedFallbackConfig } from "./degraded.js";
 export declare const DEFAULT_NOISE_PATTERNS: string[];
 export declare const DEFAULT_MEMORY_PROCESS_FILE = "/opt/openclaw/vega-data/vega-memory-process.json";
 export declare const DEFAULT_OWNER_PEER_ID = "owner";
-export declare function isOwnerPeerId(peerId: string, configuredPeerId: string): boolean;
 /**
  * How far a recall call may reach.
  *

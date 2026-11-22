@@ -1,7 +1,6 @@
 // @ts-ignore - resolved by openclaw runtime
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import type { PluginState } from "../state.js";
-import { DEFAULT_OWNER_PEER_ID, isOwnerPeerId } from "../config.js";
 import {
   buildSessionKey,
   dmHookSessionContext,
@@ -35,10 +34,10 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
     if (!recallEligible) return;
     const isClawTalk = isClawTalkSession(ctx.sessionKey);
     if (isClawTalk && !ctx.senderId) return;
-    const customOwner = state.cfg.peerName !== DEFAULT_OWNER_PEER_ID;
 
     try {
       await state.ensureInitialized();
+      const guardedOwner = state.ownerPeerIds.size > 1;
       const agentPeer = await state.getAgentPeer(agentId);
       // Capture has not run yet, so session metadata can name the prior speaker.
       // Use prompt metadata only for hosts that omit the per-turn sender.
@@ -49,7 +48,7 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
           ? await state.getParticipantPeer(currentSenderId)
           : await state.resolveSessionParticipantPeer(sessionKey);
       // Prompt hooks do not carry verified-owner authority. Explicit tools do.
-      if (customOwner && isOwnerPeerId(participantPeer.id, state.cfg.peerName)) return;
+      if (guardedOwner && state.ownerPeerIds.has(participantPeer.id)) return;
 
       const sections: string[] = [];
 
@@ -77,7 +76,7 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
           const session = await state.honcho.session(sessionKey);
           const recall = sessionRecallOptions(automatic, scopeName);
           const context = await session.context({
-            summary: !isClawTalk && !customOwner,
+            summary: !isClawTalk && !guardedOwner,
             tokens: 2000,
             peerTarget: participantPeer,
             // A scope replaces the perspective peer as the observer.
@@ -87,7 +86,7 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
           // Older Honcho servers can return a workspace card in session mode.
           card = recall.limitToSession ? undefined : context.peerCard;
           representation = context.peerRepresentation;
-          if (!isClawTalk && !customOwner) summary = context.summary?.content;
+          if (!isClawTalk && !guardedOwner) summary = context.summary?.content;
         }
       } catch (e: unknown) {
         const isNotFound =
@@ -122,7 +121,8 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
       // Only when Honcho could not be reached at all. A rejected request means
       // Honcho answered, and substituting local episodes there would hide the
       // defect behind context that looks fine.
-      if (isClawTalk || customOwner || state.cfg.recall.automatic !== "workspace" || !isConnectionFailure(error)) return;
+      if (isClawTalk || state.ownerPeerIds.size > 1 ||
+          state.cfg.recall.automatic !== "workspace" || !isConnectionFailure(error)) return;
       const degraded = await buildDegradedContext(state.cfg.degradedFallback);
       if (!degraded) return;
       api.logger.warn?.("Honcho unreachable; serving local Wonder episodes as degraded context");

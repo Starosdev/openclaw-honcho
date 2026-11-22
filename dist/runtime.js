@@ -1,4 +1,3 @@
-import { DEFAULT_OWNER_PEER_ID } from "./config.js";
 import { isManagedHonchoCloud } from "./state.js";
 const DEFAULT_SEARCH_RESULTS = 10;
 const MAX_SEARCH_RESULTS = 50;
@@ -243,7 +242,8 @@ export function createHonchoMemoryRuntime(state) {
         async getMemorySearchManager(params) {
             // This host entry point has no requester. Custom owner reads go
             // through the tools that carry verified requester identity.
-            if (state.cfg.peerName !== DEFAULT_OWNER_PEER_ID) {
+            await state.ensureInitialized();
+            if (state.ownerPeerIds.size > 1) {
                 return { manager: null, error: "Honcho custom owner memory requires a verified requester." };
             }
             return getHonchoMemorySearchManager(state, { agentId: params.agentId });

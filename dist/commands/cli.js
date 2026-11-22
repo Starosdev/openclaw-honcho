@@ -5,6 +5,7 @@ import * as path from "node:path";
 import * as readline from "node:readline";
 import { DEFAULT_OWNER_PEER_ID } from "../config.js";
 import { createHonchoClient } from "../honcho-client.js";
+import { resolveWorkspaceOwner } from "../state.js";
 const MANIFEST_PATH = () => path.join(os.homedir(), ".openclaw", ".upload-manifest.json");
 function loadManifest() {
     try {
@@ -294,15 +295,11 @@ export function registerCli(api, state) {
                     workspaceId: resolvedWorkspaceId,
                 });
                 const existingMeta = await setupHoncho.getMetadata();
-                if (ownerPeerId !== DEFAULT_OWNER_PEER_ID &&
-                    Object.values(existingMeta.agentPeerMap ?? {}).includes(ownerPeerId)) {
-                    throw new Error("Honcho peerName is already assigned to an agent.");
+                const owner = await resolveWorkspaceOwner(setupHoncho, ownerPeerId, existingMeta);
+                if (owner.metadataPatch.openclawOwnerPeerIds) {
+                    await setupHoncho.setMetadata({ ...existingMeta, ...owner.metadataPatch });
                 }
-                const ownerPeerSetup = await setupHoncho.peer(ownerPeerId);
-                if (ownerPeerId !== DEFAULT_OWNER_PEER_ID && ownerPeerSetup.metadata?.agentId) {
-                    throw new Error("Honcho peerName is already assigned to an agent.");
-                }
-                await setupHoncho.setMetadata({ ...existingMeta });
+                const ownerPeerSetup = owner.peer;
                 const agentPeerSetupMap = new Map();
                 for (const agent of normalizedAgents) {
                     const peerId = `agent-${agent.id}`;
@@ -358,9 +355,11 @@ export function registerCli(api, state) {
                     try {
                         const content = await fs.promises.readFile(filePath);
                         const hash = contentHash(content);
-                        // Skip files already uploaded with identical content to the same destination
+                        // Existing owner receipts without a peer ID predate custom owners.
                         const prev = manifest[filePath];
-                        if (prev && prev.sha256 === hash && prev.baseUrl === resolvedBaseUrl && prev.workspaceId === resolvedWorkspaceId) {
+                        const previousPeer = prev?.peerId ?? (peer === "owner" ? DEFAULT_OWNER_PEER_ID : targetPeer.id);
+                        if (prev && prev.sha256 === hash && prev.baseUrl === resolvedBaseUrl &&
+                            prev.workspaceId === resolvedWorkspaceId && previousPeer === targetPeer.id) {
                             console.log(`  ${progress} ~ Unchanged: ${filePath}`);
                             unchangedCount++;
                             continue;
@@ -370,7 +369,13 @@ export function registerCli(api, state) {
                         console.log(`  ${progress} ✓ Uploaded: ${filePath}`);
                         uploadCount++;
                         // Record success
-                        manifest[filePath] = { sha256: hash, uploadedAt: new Date().toISOString(), baseUrl: resolvedBaseUrl, workspaceId: resolvedWorkspaceId };
+                        manifest[filePath] = {
+                            sha256: hash,
+                            uploadedAt: new Date().toISOString(),
+                            baseUrl: resolvedBaseUrl,
+                            workspaceId: resolvedWorkspaceId,
+                            peerId: targetPeer.id,
+                        };
                         saveManifest(manifest);
                     }
                     catch (err) {

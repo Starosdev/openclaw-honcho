@@ -16,9 +16,6 @@ export const DEFAULT_NOISE_PATTERNS: string[] = [
 export const DEFAULT_MEMORY_PROCESS_FILE = "/opt/openclaw/vega-data/vega-memory-process.json";
 export const DEFAULT_OWNER_PEER_ID = "owner";
 
-export function isOwnerPeerId(peerId: string, configuredPeerId: string): boolean {
-  return peerId === configuredPeerId || peerId === DEFAULT_OWNER_PEER_ID;
-}
 /**
  * How far a recall call may reach.
  *

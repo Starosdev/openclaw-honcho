@@ -7,7 +7,7 @@
 import type { Honcho, Peer } from "@honcho-ai/sdk";
 // @ts-ignore - resolved by openclaw runtime
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { DEFAULT_OWNER_PEER_ID, honchoConfigSchema, isOwnerPeerId, type HonchoConfig } from "./config.js";
+import { DEFAULT_OWNER_PEER_ID, honchoConfigSchema, type HonchoConfig } from "./config.js";
 import { isClawTalkSession } from "./helpers.js";
 import { createHonchoClient } from "./honcho-client.js";
 import {
@@ -43,9 +43,34 @@ export type ToolRequester = {
   senderIsOwner?: boolean;
 };
 
+/** Retain owner protection across config changes and setup uploads in this workspace. */
+export async function resolveWorkspaceOwner(
+  honcho: Honcho,
+  peerName: string,
+  metadata: Record<string, unknown>,
+) {
+  const recorded = Array.isArray(metadata.openclawOwnerPeerIds)
+    ? metadata.openclawOwnerPeerIds.filter((id): id is string => typeof id === "string")
+    : [];
+  const ownerPeerIds = new Set([DEFAULT_OWNER_PEER_ID, ...recorded, peerName]);
+  const agentPeerMap = (metadata.agentPeerMap as Record<string, string>) ?? {};
+  if (Object.values(agentPeerMap).some((id) => id !== DEFAULT_OWNER_PEER_ID && ownerPeerIds.has(id))) {
+    throw new Error("Honcho owner peer is already assigned to an agent.");
+  }
+  const peer = await honcho.peer(peerName);
+  if (peerName !== DEFAULT_OWNER_PEER_ID && peer.metadata?.agentId) {
+    throw new Error("Honcho owner peer is already assigned to an agent.");
+  }
+  const metadataPatch = peerName !== DEFAULT_OWNER_PEER_ID && !recorded.includes(peerName)
+    ? { openclawOwnerPeerIds: [...ownerPeerIds] }
+    : {};
+  return { peer, ownerPeerIds, metadataPatch };
+}
+
 export type PluginState = {
   honcho: Honcho;
   cfg: HonchoConfig;
+  ownerPeerIds: ReadonlySet<string>;
   /** Cache of resolved participant peers, keyed by channel peer ID.
    * "Participant" intentionally generalizes over humans AND non-agent bots/agents in group
    * chats — anyone in the conversation who isn't the local OpenClaw agent peer. */
@@ -107,12 +132,13 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
   // Without this, two concurrent hooks entering init simultaneously can corrupt
   // workspace metadata. Errors propagate to all waiters.
   let initPromise: Promise<void> | null = null;
-  let ownerPeer: Peer | undefined;
+  let ownerPeer: Peer;
   const sessionParticipantPeerCache = new Map<string, Promise<Peer>>();
 
   const state: PluginState = {
     honcho,
     cfg,
+    ownerPeerIds: new Set([DEFAULT_OWNER_PEER_ID, cfg.peerName]),
     participantPeers: new Map<string, Peer>(),
     agentPeers: new Map<string, Peer>(),
     agentPeerMap: {},
@@ -152,60 +178,52 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
   }
 
   async function doInit(): Promise<void> {
-
     const wsMeta = await honcho.getMetadata();
-    state.agentPeerMap = (wsMeta.agentPeerMap as Record<string, string>) ?? {};
-    if (cfg.peerName !== DEFAULT_OWNER_PEER_ID &&
-        Object.values(state.agentPeerMap).includes(cfg.peerName)) {
-      throw new Error("Honcho peerName is already assigned to an agent.");
-    }
+    const owner = await resolveWorkspaceOwner(honcho, cfg.peerName, wsMeta);
+    const agentPeerMap = { ...((wsMeta.agentPeerMap as Record<string, string>) ?? {}) };
 
     const defaultId = resolveDefaultAgentId();
-    if (Object.keys(state.agentPeerMap).length === 0) {
-      state.agentPeerMap[defaultId] = `agent-${defaultId}`;
-      await honcho.setMetadata({ ...wsMeta, agentPeerMap: state.agentPeerMap });
-    } else if (Object.values(state.agentPeerMap).includes(LEGACY_PEER_ID) && !state.agentPeerMap[defaultId]) {
-      state.agentPeerMap[defaultId] = LEGACY_PEER_ID;
-      await honcho.setMetadata({ ...wsMeta, agentPeerMap: state.agentPeerMap });
+    let agentMapChanged = false;
+    if (Object.keys(agentPeerMap).length === 0) {
+      agentPeerMap[defaultId] = `agent-${defaultId}`;
+      agentMapChanged = true;
+    } else if (Object.values(agentPeerMap).includes(LEGACY_PEER_ID) && !agentPeerMap[defaultId]) {
+      agentPeerMap[defaultId] = LEGACY_PEER_ID;
+      agentMapChanged = true;
+    }
+    if (agentMapChanged || owner.metadataPatch.openclawOwnerPeerIds) {
+      await honcho.setMetadata({ ...wsMeta, ...owner.metadataPatch, agentPeerMap });
     }
 
-    await ensureOwnerPeer();
-
+    state.agentPeerMap = agentPeerMap;
+    state.ownerPeerIds = owner.ownerPeerIds;
+    ownerPeer = owner.peer;
     state.initialized = true;
   }
 
-  async function ensureOwnerPeer(): Promise<Peer> {
-    if (ownerPeer) return ownerPeer;
-    const peer = await honcho.peer(cfg.peerName);
-    if (cfg.peerName !== DEFAULT_OWNER_PEER_ID && peer.metadata?.agentId) {
-      throw new Error("Honcho peerName is already assigned to an agent.");
-    }
-    ownerPeer = peer;
-    return peer;
-  }
-
   async function getParticipantPeer(channelPeerId?: string): Promise<Peer> {
-    if (!channelPeerId) return ensureOwnerPeer();
+    await ensureInitialized();
+    if (!channelPeerId) return ownerPeer;
     if (CLAWTALK_PEER_ID.test(channelPeerId) || CLAWTALK_PEER_ID.test(peersPersister.peers[channelPeerId] ?? "")) {
       throw new Error("ClawTalk device peers require an authenticated device context.");
     }
 
     // Known senders resolve via the peers file. Unknown senders auto-seed
     // per the persister's defaultUnknownPolicy: legacy installs merge into
-    // the owner peer; fresh installs derive a distinct peer from the sender ID.
+    // the legacy owner peer; fresh installs derive a distinct peer from the sender ID.
     let peer = state.participantPeers.get(channelPeerId);
     if (peer) return peer;
 
     const wasInFile = channelPeerId in peersPersister.peers;
-    const resolvedPeerId = resolveParticipantPeerId(channelPeerId, peersPersister, cfg.peerName);
+    const resolvedPeerId = resolveParticipantPeerId(channelPeerId, peersPersister);
     if (CLAWTALK_PEER_ID.test(resolvedPeerId)) {
       throw new Error("ClawTalk device peers require an authenticated device context.");
     }
-    const autoSeeded = !wasInFile && !isOwnerPeerId(resolvedPeerId, cfg.peerName);
+    const autoSeeded = !wasInFile && !state.ownerPeerIds.has(resolvedPeerId);
 
     if (resolvedPeerId === cfg.peerName) {
-      peer = await ensureOwnerPeer();
-    } else if (resolvedPeerId === DEFAULT_OWNER_PEER_ID) {
+      peer = ownerPeer;
+    } else if (state.ownerPeerIds.has(resolvedPeerId)) {
       peer = await honcho.peer(resolvedPeerId);
     } else {
       const metadata: Record<string, unknown> = { channelPeerId };
@@ -271,7 +289,7 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
     if (isClawTalkSession(requester.sessionKey)) return getClawTalkParticipantPeer(senderId);
     if (senderId) {
       const peer = await getParticipantPeer(senderId);
-      if (!isOwnerPeerId(peer.id, cfg.peerName) || requester.senderIsOwner === true) return peer;
+      if (!state.ownerPeerIds.has(peer.id) || requester.senderIsOwner === true) return peer;
       throw new Error("Honcho owner memory requires a verified owner.");
     }
     // Operator turns (TUI, Control UI) carry no sender id; capture files them
@@ -281,7 +299,7 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
   }
 
   function isParticipantPeerId(peerId: string): boolean {
-    if (isOwnerPeerId(peerId, cfg.peerName)) return true;
+    if (state.ownerPeerIds.has(peerId)) return true;
     // Check if this peer ID is a known participant peer
     for (const [, peer] of state.participantPeers) {
       if (peer.id === peerId) return true;
@@ -300,7 +318,7 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
     if (!peerId) {
       const allPeers = await honcho.peers();
       for await (const p of allPeers) {
-        if (isOwnerPeerId(p.id, cfg.peerName)) continue;
+        if (state.ownerPeerIds.has(p.id)) continue;
         const meta = await p.getMetadata();
         if (meta?.agentId === id) {
           peerId = p.id;
