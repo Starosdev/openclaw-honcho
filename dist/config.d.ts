@@ -5,6 +5,7 @@ import { type AntiHitsConfig } from "./antihits.js";
 import type { DegradedFallbackConfig } from "./degraded.js";
 export declare const DEFAULT_NOISE_PATTERNS: string[];
 export declare const DEFAULT_MEMORY_PROCESS_FILE = "/opt/openclaw/vega-data/vega-memory-process.json";
+export declare const DEFAULT_OWNER_PEER_ID = "owner";
 /**
  * How far a recall call may reach.
  *
@@ -48,6 +49,7 @@ export type HonchoConfig = {
     noisePatterns: string[];
     disableDefaultNoisePatterns: boolean;
     captureSystemRuns: boolean;
+    peerName: string;
     ownerObserveOthers: boolean;
     crossSessionSearch: boolean;
     enableMemoryCompatibilityTools: boolean;

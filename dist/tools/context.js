@@ -24,6 +24,7 @@ export function registerContextTool(api, state) {
                     console.warn("honcho_context card() error:", err);
                     return null;
                 });
+                await state.assertToolParticipantReadable(toolCtx, participantPeer.id);
                 if (!card?.length) {
                     return {
                         content: [
@@ -49,6 +50,7 @@ export function registerContextTool(api, state) {
             const representation = await participantPeer.representation({
                 includeMostFrequent: true,
             });
+            await state.assertToolParticipantReadable(toolCtx, participantPeer.id);
             if (!representation) {
                 return {
                     content: [

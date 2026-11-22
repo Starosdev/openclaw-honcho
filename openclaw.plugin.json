@@ -56,6 +56,12 @@
         "default": false,
         "description": "Allow automatic recall and capture for cron and heartbeat runs. Message noise filters still apply."
       },
+      "peerName": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{1,100}$",
+        "default": "owner",
+        "description": "Explicit owner peer ID in this Honcho workspace. Existing messages stay under their original peer."
+      },
       "ownerObserveOthers": {
         "type": "boolean",
         "default": false,
@@ -136,6 +142,11 @@
       "label": "Noise Patterns",
       "advanced": true,
       "help": "Additional substring patterns to filter. Messages containing any pattern are dropped before saving to Honcho."
+    },
+    "peerName": {
+      "label": "Owner Peer ID",
+      "advanced": true,
+      "help": "Defaults to owner. Set explicitly to reuse an existing owner peer in the same workspace."
     },
     "ownerObserveOthers": {
       "label": "Owner Observes Agent",

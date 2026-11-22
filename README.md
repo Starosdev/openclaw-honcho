@@ -82,6 +82,9 @@ Run `openclaw honcho setup` to configure interactively, or set values directly i
 | `disableDefaultNoisePatterns` | `boolean` | `false`           | When `true`, built-in noise patterns are not applied — only `noisePatterns` entries are used. |
 | `crossSessionSearch`   | `boolean`  | `true`                     | Default scope for `memory_search`. `true` = results span every session the participant peer has written to; `false` = scope to the active session. `memory_search` accepts an optional `crossSessionSearch` boolean parameter to override this per-call. |
 | `ownerObserveOthers`   | `boolean`  | `false`                    | Whether the owner peer observes agent messages in Honcho's social model. |
+| `peerName`             | `string`   | `owner`                    | Explicit owner peer ID in the Honcho workspace. Use it to reuse an owner peer from another integration. |
+
+Changing `peerName` leaves historical messages on their original peer. New custom-owner capture requires verified owner attribution. Use requester-aware tools such as `memory_search` and `memory_get` from a verified owner session. Honcho records protected owners as members of the workspace's message-free `openclaw-owner-policy` session. This preserves owner protection after you change or remove `peerName`, including for automatic prompt recall and requester-less memory lookup.
 | `recall` | `object` | see below | How far each recall path may reach. See [Recall Boundaries](#recall-boundaries). |
 
 ### Self-Hosted / Local Honcho

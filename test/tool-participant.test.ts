@@ -33,7 +33,7 @@ function makePeer(id: string) {
 }
 
 /** A group where Bob (222) spoke last, so session metadata names him. */
-function setup(defaultUnknownPolicy: "per-sender" | "owner" = "per-sender") {
+function setup(defaultUnknownPolicy: "per-sender" | "owner" = "per-sender", peerName?: string) {
   const peers = new Map([makePeer("111"), makePeer("222")].map((p) => [p.id, p]));
   const session = {
     getMetadata: vi.fn(async () => ({ participantSenderId: "222" })),
@@ -46,8 +46,13 @@ function setup(defaultUnknownPolicy: "per-sender" | "owner" = "per-sender") {
     })),
   };
   let wsMeta: Record<string, unknown> = {};
+  const protectedPeers = new Set<string>();
   fake.honcho = {
-    http: { upload: vi.fn() },
+    workspaceId: "fixture",
+    http: {
+      upload: vi.fn(),
+      get: vi.fn(async () => ({ pages: 1, items: [...protectedPeers].map((id) => ({ id })) })),
+    },
     getMetadata: vi.fn(async () => wsMeta),
     setMetadata: vi.fn(async (m: Record<string, unknown>) => { wsMeta = m; }),
     peer: vi.fn(async (id: string) => {
@@ -56,16 +61,22 @@ function setup(defaultUnknownPolicy: "per-sender" | "owner" = "per-sender") {
       return p;
     }),
     peers: vi.fn(async () => [...peers.values()]),
-    session: vi.fn(async () => session),
+    session: vi.fn(async (id: string) => id === "openclaw-owner-policy" ? {
+      addPeers: async ([peer]: [{ id: string }]) => { protectedPeers.add(peer.id); },
+    } : session),
     search: vi.fn(async () => []),
   };
   writeFileSync(
     process.env.OPENCLAW_HONCHO_PEERS_FILE!,
-    JSON.stringify({ version: 1, defaultUnknownPolicy, peers: { "111": "111", "222": "222" } }),
+    JSON.stringify({ version: 1, defaultUnknownPolicy, peers: {
+      "111": "111", "222": "222", "333": peerName ?? "owner", "444": "owner",
+      ...(peerName ? { [peerName]: "111" } : {}),
+    } }),
   );
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  const state = createPluginState({ pluginConfig: { baseUrl: "http://x" }, logger, config: {} } as never);
-  return { state, session, peers };
+  const createState = (name?: string) =>
+    createPluginState({ pluginConfig: { baseUrl: "http://x", peerName: name }, logger, config: {} } as never);
+  return { state: createState(peerName), createState, session, peers };
 }
 
 function tool(register: (api: never, state: PluginState) => void, state: PluginState, toolCtx: Record<string, unknown>) {
@@ -142,14 +153,25 @@ describe("tools read the requester's own memory", () => {
     expect([...peers.keys()].sort()).toEqual(["111", "222", "agent-main", "owner"]);
   });
 
-  it("an operator turn from the TUI reads owner, where capture files it", async () => {
-    const { state, session } = setup();
+  it.each([undefined, "vega-owner"])("allows verified owner reads and rejects non-owner aliases (peerName %s)", async (peerName) => {
+    const { state, session } = setup("owner", peerName);
     const history = tool(registerSessionTool, state, { sessionKey: GROUP_KEY, agentId: "main", senderIsOwner: true });
     const result = await history.execute("id", {});
-    expect(session.context.mock.calls[0][0].peerTarget.id).toBe("owner");
+    expect(session.context.mock.calls[0][0].peerTarget.id).toBe(peerName ?? "owner");
     expect(result.details).toMatchObject({ summary: "shared summary", messageCount: 2 });
     const omitted = await history.execute("id", { includeSummary: false, includeMessages: false });
     expect(omitted.details).toMatchObject({ summary: null, messages: [] });
+    for (const requesterSenderId of ["333", "444", "555"]) {
+      const denied = tool(registerSessionTool, state, { sessionKey: GROUP_KEY, requesterSenderId });
+      await expect(denied.execute("id", {})).rejects.toThrow("verified owner");
+    }
+    expect(session.context).toHaveBeenCalledTimes(2);
+
+    if (peerName) {
+      const mapped = tool(registerSessionTool, state, { sessionKey: GROUP_KEY, requesterSenderId: peerName });
+      await mapped.execute("id", {});
+      expect(session.context.mock.calls.at(-1)?.[0].peerTarget.id).toBe("111");
+    }
   });
 
   it("denies requester reads without trusted identity", async () => {
@@ -157,5 +179,47 @@ describe("tools read the requester's own memory", () => {
     const t = tool(registerSessionTool, state, { sessionKey: GROUP_KEY, agentId: "main" });
     await expect(t.execute("id", { about: "222" })).rejects.toThrow("trusted requester identity");
     expect(session.context).not.toHaveBeenCalled();
+  });
+
+  it("rejects a custom owner peer already mapped to an agent", async () => {
+    const { state, peers } = setup("per-sender", "existing-agent-peer");
+    await state.honcho.setMetadata({ agentPeerMap: { main: "existing-agent-peer" } });
+
+    await expect(state.ensureInitialized()).rejects.toThrow("already assigned to an agent");
+    expect(peers.has("existing-agent-peer")).toBe(false);
+  });
+
+  it("denies non-owner aliases to the original custom peer after rollback or rotation", async () => {
+    const { state, createState, session } = setup("owner", "vega-owner");
+    const alreadyRunning = createState();
+    await alreadyRunning.ensureInitialized();
+    await state.ensureInitialized();
+    expect((await state.getParticipantPeer("555")).id).toBe("owner");
+
+    // An unrelated metadata replacement cannot erase the protected peer list.
+    await state.honcho.setMetadata({ agentPeerMap: { main: "agent-main" } });
+    for (const runtime of [alreadyRunning, createState(), createState("rotated-owner")]) {
+      const history = tool(registerSessionTool, runtime, {
+        sessionKey: GROUP_KEY, requesterSenderId: "333",
+      });
+      await expect(history.execute("id", {})).rejects.toThrow("verified owner");
+    }
+    expect(session.context).not.toHaveBeenCalled();
+
+    const verifiedChannelOwner = await state.resolveToolParticipantPeer({
+      sessionKey: GROUP_KEY, requesterSenderId: "111", senderIsOwner: true,
+    });
+    expect(verifiedChannelOwner.id).toBe("vega-owner");
+  });
+
+  it("withholds an in-flight tool result when the peer becomes a protected owner", async () => {
+    const { state, createState, peers } = setup();
+    peers.get("111")!.card.mockImplementationOnce(async () => {
+      await createState("111").ensureInitialized();
+      return ["Protected owner fact"];
+    });
+    const lookup = tool(registerContextTool, state, { sessionKey: GROUP_KEY, requesterSenderId: "111" });
+
+    await expect(lookup.execute("id", {})).rejects.toThrow("verified owner");
   });
 });

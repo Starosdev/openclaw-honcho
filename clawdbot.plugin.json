@@ -13,6 +13,12 @@
         "type": "string",
         "description": "Honcho workspace ID (defaults to 'openclaw')"
       },
+      "peerName": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9_-]{1,100}$",
+        "default": "owner",
+        "description": "Explicit owner peer ID in this Honcho workspace."
+      },
       "baseUrl": {
         "type": "string",
         "default": "https://api.honcho.dev"

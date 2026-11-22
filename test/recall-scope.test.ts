@@ -27,6 +27,8 @@ function mkState(recall: Record<string, unknown>) {
   };
   const peer = { id: "owner" };
   const state = {
+    ownerPeerIds: new Set(["owner"]),
+    refreshOwnerProtection: vi.fn(async () => {}),
     cfg: honchoConfigSchema.parse({ baseUrl: "http://x", recall }),
     honcho: { session: vi.fn(async (_key: string, options?: { metadata?: Record<string, unknown> }) => {
       if (options?.metadata) metadata = options.metadata;
@@ -38,6 +40,7 @@ function mkState(recall: Record<string, unknown>) {
     getParticipantPeer: vi.fn(async (senderId: string) => ({ id: senderId })),
     resolveSessionParticipantPeer: vi.fn(async () => peer),
     resolveToolParticipantPeer: vi.fn(async () => peer),
+    assertToolParticipantReadable: vi.fn(async () => {}),
     resolveDefaultAgentId: vi.fn(() => "main"),
   } as unknown as PluginState;
   return { state, session, agentPeer };
@@ -75,6 +78,25 @@ async function askArgs(
 }
 
 describe("recall boundaries are applied per path", () => {
+  it("withholds custom and historical owner recall without verified owner context", async () => {
+    const { state, session } = mkState({});
+    state.ownerPeerIds = new Set(["owner", "vega-owner"]);
+    let handler: ((e: unknown, c: unknown) => Promise<unknown>) | undefined;
+    registerContextHook(
+      { on: (n: string, fn: never) => { if (n === "before_prompt_build") handler = fn; }, logger } as never,
+      state,
+    );
+    const prompt = { prompt: "ordinary input", messages: [] };
+    for (const senderId of ["owner", "vega-owner"]) {
+      expect(await handler?.(prompt, { ...ctx, senderId })).toBeUndefined();
+    }
+    expect(session.context).not.toHaveBeenCalled();
+    await handler?.(prompt, { ...ctx, senderId: "alice" });
+    expect(session.context).toHaveBeenCalledWith(expect.objectContaining({
+      peerTarget: { id: "alice" }, summary: false,
+    }));
+  });
+
   it("records the shared DM capture boundary for a short prompt without recalling", async () => {
     const { state } = mkState({});
     let handler: ((e: unknown, c: unknown) => Promise<unknown>) | undefined;

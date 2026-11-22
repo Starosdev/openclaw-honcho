@@ -1,7 +1,14 @@
 import { createRequire } from "node:module";
 import { VERSION as gatewayVersion } from "openclaw/plugin-sdk/cli-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { honchoConfigSchema } from "../config.js";
 import { createPluginState, isManagedHonchoCloud } from "../state.js";
+
+it("rejects owner peer IDs in reserved namespaces or invalid for Honcho", () => {
+  for (const peerName of ["agent-main", "clawtalk-fixture", "openclaw", "bad id", ""]) {
+    expect(() => honchoConfigSchema.parse({ peerName })).toThrow("peerName must be");
+  }
+});
 
 it("sends Gateway and plugin versions with JSON requests and multipart uploads", async () => {
   const requests: Headers[] = [];

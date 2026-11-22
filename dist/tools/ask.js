@@ -30,6 +30,7 @@ export function registerAskTool(api, state) {
                 reasoningLevel,
                 ...peerRecallOptions(state.cfg.recall.ask, state.cfg.recall.scopeName, sessionKey),
             });
+            await state.assertToolParticipantReadable(toolCtx, participantPeer.id);
             return {
                 content: [{ type: "text", text: answer }],
                 details: { query, depth, answer: answer ?? null },

@@ -3,11 +3,10 @@
  * Follows the dependency-injection pattern: createPluginState() returns a
  * PluginState object that gets passed to every module.
  */
-import { honchoConfigSchema } from "./config.js";
+import { DEFAULT_OWNER_PEER_ID, honchoConfigSchema } from "./config.js";
 import { isClawTalkSession } from "./helpers.js";
 import { createHonchoClient } from "./honcho-client.js";
 import { PeersPersister, loadPeersFileSync, resolvePeersFilePath, resolveParticipantPeerId, } from "./peers.js";
-export const OWNER_ID = "owner";
 export const LEGACY_PEER_ID = "openclaw";
 const CLAWTALK_PEER_ID = /^clawtalk-gateway-device-[a-f0-9]{64}$/;
 export const HONCHO_CLOUD_HOSTNAME = "api.honcho.dev";
@@ -24,6 +23,49 @@ export function isManagedHonchoCloud(baseUrl) {
     catch {
         return false;
     }
+}
+const OWNER_POLICY_SESSION_ID = "openclaw-owner-policy";
+async function readWorkspaceOwnerIds(honcho) {
+    const ownerPeerIds = new Set([DEFAULT_OWNER_PEER_ID]);
+    const workspace = encodeURIComponent(honcho.workspaceId);
+    const path = `/v3/workspaces/${workspace}/sessions/${OWNER_POLICY_SESSION_ID}/peers`;
+    for (let page = 1;; page++) {
+        try {
+            const result = await honcho.http.get(path, { query: { page } });
+            if (!Number.isSafeInteger(result.pages) || result.pages < 0) {
+                throw new Error("Invalid Honcho owner policy pagination.");
+            }
+            for (const peer of result.items)
+                ownerPeerIds.add(peer.id);
+            if (page >= result.pages)
+                return ownerPeerIds;
+        }
+        catch (error) {
+            if (page === 1 && error instanceof Error && error.name === "NotFoundError") {
+                return ownerPeerIds;
+            }
+            throw error;
+        }
+    }
+}
+/** Persist protected owner IDs through additive membership, apart from workspace metadata. */
+export async function resolveWorkspaceOwner(honcho, peerName, metadata) {
+    const ownerPeerIds = await readWorkspaceOwnerIds(honcho);
+    const agentPeerMap = metadata.agentPeerMap ?? {};
+    if (Object.values(agentPeerMap).some((id) => id !== DEFAULT_OWNER_PEER_ID &&
+        (ownerPeerIds.has(id) || id === peerName))) {
+        throw new Error("Honcho owner peer is already assigned to an agent.");
+    }
+    const peer = await honcho.peer(peerName);
+    if (peerName !== DEFAULT_OWNER_PEER_ID && peer.metadata?.agentId) {
+        throw new Error("Honcho owner peer is already assigned to an agent.");
+    }
+    if (!ownerPeerIds.has(peerName)) {
+        const policy = await honcho.session(OWNER_POLICY_SESSION_ID);
+        await policy.addPeers([peer, { observeMe: false, observeOthers: false }]);
+        ownerPeerIds.add(peerName);
+    }
+    return { peer, ownerPeerIds };
 }
 export function createPluginState(api) {
     const cfg = honchoConfigSchema.parse(api.pluginConfig);
@@ -43,10 +85,13 @@ export function createPluginState(api) {
     // Without this, two concurrent hooks entering init simultaneously can corrupt
     // workspace metadata. Errors propagate to all waiters.
     let initPromise = null;
+    let ownerPeer;
     const sessionParticipantPeerCache = new Map();
     const state = {
         honcho,
         cfg,
+        ownerPeerIds: new Set([DEFAULT_OWNER_PEER_ID, cfg.peerName]),
+        refreshOwnerProtection,
         participantPeers: new Map(),
         agentPeers: new Map(),
         agentPeerMap: {},
@@ -61,6 +106,7 @@ export function createPluginState(api) {
         resolveSessionParticipantPeer,
         invalidateSessionParticipantPeer,
         resolveToolParticipantPeer,
+        assertToolParticipantReadable,
         isParticipantPeerId,
         resolveDefaultAgentId,
     };
@@ -88,49 +134,54 @@ export function createPluginState(api) {
     }
     async function doInit() {
         const wsMeta = await honcho.getMetadata();
-        state.agentPeerMap = wsMeta.agentPeerMap ?? {};
+        const owner = await resolveWorkspaceOwner(honcho, cfg.peerName, wsMeta);
+        const agentPeerMap = { ...(wsMeta.agentPeerMap ?? {}) };
         const defaultId = resolveDefaultAgentId();
-        if (Object.keys(state.agentPeerMap).length === 0) {
-            state.agentPeerMap[defaultId] = `agent-${defaultId}`;
-            await honcho.setMetadata({ ...wsMeta, agentPeerMap: state.agentPeerMap });
+        let agentMapChanged = false;
+        if (Object.keys(agentPeerMap).length === 0) {
+            agentPeerMap[defaultId] = `agent-${defaultId}`;
+            agentMapChanged = true;
         }
-        else if (Object.values(state.agentPeerMap).includes(LEGACY_PEER_ID) && !state.agentPeerMap[defaultId]) {
-            state.agentPeerMap[defaultId] = LEGACY_PEER_ID;
-            await honcho.setMetadata({ ...wsMeta, agentPeerMap: state.agentPeerMap });
+        else if (Object.values(agentPeerMap).includes(LEGACY_PEER_ID) && !agentPeerMap[defaultId]) {
+            agentPeerMap[defaultId] = LEGACY_PEER_ID;
+            agentMapChanged = true;
         }
-        // Create default "owner" peer
-        const defaultPeer = await honcho.peer(OWNER_ID, { metadata: {} });
-        state.participantPeers.set(OWNER_ID, defaultPeer);
+        if (agentMapChanged) {
+            await honcho.setMetadata({ ...wsMeta, agentPeerMap });
+        }
+        state.agentPeerMap = agentPeerMap;
+        state.ownerPeerIds = owner.ownerPeerIds;
+        ownerPeer = owner.peer;
         state.initialized = true;
     }
-    async function ensureOwnerPeer() {
-        let peer = state.participantPeers.get(OWNER_ID);
-        if (peer)
-            return peer;
-        peer = await honcho.peer(OWNER_ID, { metadata: {} });
-        state.participantPeers.set(OWNER_ID, peer);
-        return peer;
+    async function refreshOwnerProtection() {
+        const recorded = await readWorkspaceOwnerIds(honcho);
+        state.ownerPeerIds = new Set([...state.ownerPeerIds, ...recorded]);
     }
     async function getParticipantPeer(channelPeerId) {
+        await ensureInitialized();
         if (!channelPeerId)
-            return ensureOwnerPeer();
+            return ownerPeer;
         if (CLAWTALK_PEER_ID.test(channelPeerId) || CLAWTALK_PEER_ID.test(peersPersister.peers[channelPeerId] ?? "")) {
             throw new Error("ClawTalk device peers require an authenticated device context.");
         }
         // Known senders resolve via the peers file. Unknown senders auto-seed
         // per the persister's defaultUnknownPolicy: legacy installs merge into
-        // OWNER_ID; fresh installs mint a distinct participant-<sanitized> peer.
+        // the legacy owner peer; fresh installs derive a distinct peer from the sender ID.
         let peer = state.participantPeers.get(channelPeerId);
         if (peer)
             return peer;
         const wasInFile = channelPeerId in peersPersister.peers;
-        const resolvedPeerId = resolveParticipantPeerId(channelPeerId, peersPersister, OWNER_ID);
+        const resolvedPeerId = resolveParticipantPeerId(channelPeerId, peersPersister);
         if (CLAWTALK_PEER_ID.test(resolvedPeerId)) {
             throw new Error("ClawTalk device peers require an authenticated device context.");
         }
-        const autoSeeded = !wasInFile && resolvedPeerId !== OWNER_ID;
-        if (resolvedPeerId === OWNER_ID) {
-            peer = await ensureOwnerPeer();
+        const autoSeeded = !wasInFile && !state.ownerPeerIds.has(resolvedPeerId);
+        if (resolvedPeerId === cfg.peerName) {
+            peer = ownerPeer;
+        }
+        else if (state.ownerPeerIds.has(resolvedPeerId)) {
+            peer = await honcho.peer(resolvedPeerId);
         }
         else {
             const metadata = { channelPeerId };
@@ -193,9 +244,13 @@ export function createPluginState(api) {
         const senderId = requester.requesterSenderId?.trim();
         if (isClawTalkSession(requester.sessionKey))
             return getClawTalkParticipantPeer(senderId);
+        await ensureInitialized();
+        await refreshOwnerProtection();
+        if (requester.senderIsOwner === true && state.ownerPeerIds.size > 1)
+            return ownerPeer;
         if (senderId) {
             const peer = await getParticipantPeer(senderId);
-            if (peer.id !== OWNER_ID || requester.senderIsOwner === true)
+            if (!state.ownerPeerIds.has(peer.id) || requester.senderIsOwner === true)
                 return peer;
             throw new Error("Honcho owner memory requires a verified owner.");
         }
@@ -205,8 +260,15 @@ export function createPluginState(api) {
             return getParticipantPeer();
         throw new Error("Honcho requires a trusted requester identity.");
     }
+    async function assertToolParticipantReadable(requester, peerId) {
+        if (requester.senderIsOwner === true || isClawTalkSession(requester.sessionKey))
+            return;
+        await refreshOwnerProtection();
+        if (state.ownerPeerIds.has(peerId))
+            throw new Error("Honcho owner memory requires a verified owner.");
+    }
     function isParticipantPeerId(peerId) {
-        if (peerId === OWNER_ID)
+        if (state.ownerPeerIds.has(peerId))
             return true;
         // Check if this peer ID is a known participant peer
         for (const [, peer] of state.participantPeers) {
@@ -224,7 +286,7 @@ export function createPluginState(api) {
         if (!peerId) {
             const allPeers = await honcho.peers();
             for await (const p of allPeers) {
-                if (p.id === OWNER_ID)
+                if (state.ownerPeerIds.has(p.id))
                     continue;
                 const meta = await p.getMetadata();
                 if (meta?.agentId === id) {

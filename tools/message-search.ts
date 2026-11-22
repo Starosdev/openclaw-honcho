@@ -95,6 +95,7 @@ export function registerMessageSearchTool(api: OpenClawPluginApi, state: PluginS
         if (from === "user") {
           const participantPeer = await state.resolveToolParticipantPeer(toolCtx);
           messages = await participantPeer.search(query, searchOpts);
+          await state.assertToolParticipantReadable(toolCtx, participantPeer.id);
         } else if (from === "agent") {
           const agentPeer = await state.getAgentPeer(toolCtx.agentId);
           messages = await agentPeer.search(query, searchOpts);

@@ -47,6 +47,8 @@ function createMockState(): { state: PluginState; session: SessionStub; ownerPee
   };
 
   const state = {
+    ownerPeerIds: new Set(["owner"]),
+    refreshOwnerProtection: vi.fn(async () => {}),
     cfg: {
       noisePatterns: DEFAULT_NOISE_PATTERNS,
       ownerObserveOthers: false,
