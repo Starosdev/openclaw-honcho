@@ -114,9 +114,16 @@ describe("tools read the requester's own memory", () => {
     const result = await tool(registerSessionTool, state, aliceTurn).execute("id", {});
     expect(result.content[0].text).toContain("Alice row");
     expect(result.content[0].text).not.toMatch(/Bob row|shared summary/);
-    await tool(registerAskTool, state, aliceTurn).execute("id", { query: "q" });
-    await tool(registerContextTool, state, aliceTurn).execute("id", {});
-    await tool(registerSearchTool, state, aliceTurn).execute("id", { query: "hike" });
+    expect(result.details).toMatchObject({
+      summary: null,
+      messages: [{ speaker: "User", createdAt: null, content: "Alice row" }],
+    });
+    const ask = await tool(registerAskTool, state, aliceTurn).execute("id", { query: "q" });
+    expect(ask.details.answer).toBe("answer");
+    const context = await tool(registerContextTool, state, aliceTurn).execute("id", {});
+    expect(context.details.facts).toEqual(["fact"]);
+    const conclusions = await tool(registerSearchTool, state, aliceTurn).execute("id", { query: "hike" });
+    expect(conclusions.details.representation).toBe("rep");
     const search = tool(registerMessageSearchTool, state, aliceTurn);
     await search.execute("id", { query: "hike" });
     await expect(search.execute("id", { query: "hike", from: "all" })).rejects.toThrow("verified owner");
@@ -136,8 +143,12 @@ describe("tools read the requester's own memory", () => {
 
   it("an operator turn from the TUI reads owner, where capture files it", async () => {
     const { state, session } = setup();
-    await tool(registerSessionTool, state, { sessionKey: GROUP_KEY, agentId: "main", senderIsOwner: true }).execute("id", {});
+    const history = tool(registerSessionTool, state, { sessionKey: GROUP_KEY, agentId: "main", senderIsOwner: true });
+    const result = await history.execute("id", {});
     expect(session.context.mock.calls[0][0].peerTarget.id).toBe("owner");
+    expect(result.details).toMatchObject({ summary: "shared summary", messageCount: 2 });
+    const omitted = await history.execute("id", { includeSummary: false, includeMessages: false });
+    expect(omitted.details).toMatchObject({ summary: null, messages: [] });
   });
 
   it("denies requester reads without trusted identity", async () => {

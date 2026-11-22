@@ -32,7 +32,7 @@ export function registerAskTool(api, state) {
             });
             return {
                 content: [{ type: "text", text: answer }],
-                details: { query, depth },
+                details: { query, depth, answer: answer ?? null },
             };
         },
     }), { name: "honcho_ask" });
