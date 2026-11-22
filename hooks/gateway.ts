@@ -4,6 +4,12 @@ import type { PluginState } from "../state.js";
 
 export function registerGatewayHook(api: OpenClawPluginApi, state: PluginState): void {
   api.on("gateway_start", async (_event, _ctx) => {
+    if (api.config.plugins?.entries?.["openclaw-honcho"]?.hooks?.allowConversationAccess !== true) {
+      api.logger.warn(
+        "Honcho conversation capture is disabled. To enable it, set " +
+          "plugins.entries.openclaw-honcho.hooks.allowConversationAccess to true and restart the gateway.",
+      );
+    }
     api.logger.info("Initializing Honcho memory...");
     try {
       await state.ensureInitialized();
