@@ -5,6 +5,15 @@ import type { PluginState } from "../state.js";
 import { OWNER_ID } from "../state.js";
 import {
   buildSessionKey,
+  dmHookSessionContext,
+  hasSharedDmHistory,
+  isSharedMainSessionKey,
+  resolveSharedDmKey,
+  restoreSharedDmMetadata,
+  selectSharedDmHistory,
+  sharedDmParticipants,
+  sharedDmSourceMessageId,
+  usesSharedGroupRouting,
   classifySession,
   isClawTalkSession,
   isSystemRun,
@@ -22,6 +31,7 @@ type CaptureProvenance = { kind?: string; sourceTool?: string; sourceSessionKey?
 type CaptureContext = Parameters<typeof isSystemRun>[0] & {
   agentId?: string;
   sessionId?: string;
+  channel?: string;
   messageProvider?: string;
   runId?: string;
   sourceMessageId?: string;
@@ -90,7 +100,18 @@ export async function flushMessages(
   if (/(?:^|:)active-memory:[a-f0-9]{12}$/i.test(openclawSessionKey)) return 0;
 
   const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
-  const sessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId });
+  const keyContext = dmHookSessionContext({ ...ctx, agentId }, api.config);
+  const dmKey = resolveSharedDmKey(keyContext);
+  if (dmKey) {
+    messages = selectSharedDmHistory(ctx.sessionKey, dmKey,
+      await restoreSharedDmMetadata(messages, { ...ctx, agentId }));
+    if (!messages.length) return 0;
+  } else if (!usesSharedGroupRouting(api.config) && isSharedMainSessionKey(ctx.sessionKey) &&
+      hasSharedDmHistory(ctx.sessionKey, messages)) {
+    // Reset can expose a mixed transcript with no trusted sender or channel.
+    return 0;
+  }
+  const sessionKey = buildSessionKey(keyContext);
   const isSubagent = isSubagentSession(ctx);
   const parentAgentId = isSubagent ? subagentParentMap.get(ctx.sessionKey ?? "") : undefined;
   const sessionClass = classifySession(openclawSessionKey);
@@ -112,6 +133,7 @@ export async function flushMessages(
   const sessionMeta: Record<string, unknown> = {
     agentId,
     openclawSessionKey,
+    ...(dmKey ? { conversationSessionKey: dmKey } : {}),
     sessionClass,
     ...(typeof ctx.messageProvider === "string" && ctx.messageProvider.length > 0
       ? { messageProvider: ctx.messageProvider }
@@ -152,11 +174,15 @@ export async function flushMessages(
       : skipped?.size
         ? 0
         : Math.min(Math.max(state.turnStartIndex.get(sessionKey) ?? 0, 0), messages.length);
-  const sourceMessageId = clawTalkUserIndex >= 0 ? runId : systemRun ? undefined : ctx.sourceMessageId;
+  const sourceMessageId = clawTalkUserIndex >= 0 ? runId : systemRun || dmKey ? undefined : ctx.sourceMessageId;
   const rawLastSavedIndex =
     typeof existingMeta.lastSavedIndex === "number" ? existingMeta.lastSavedIndex : 0;
   const lastSavedIndex = Math.min(Math.max(rawLastSavedIndex, 0), messages.length);
   const checkpoint = existingMeta.lastSavedMessageId;
+  if (dmKey && checkpoint === undefined && !state.turnStartIndex.has(sessionKey)) {
+    // A new participant session has no boundary for distinguishing prior shared history.
+    return 0;
+  }
   let startIndex = Math.max(turnStartIndex, lastSavedIndex);
   if (typeof checkpoint === "string" && checkpoint.length > 0) {
     const hintedIndex = lastSavedIndex - 1;
@@ -309,6 +335,7 @@ export async function flushMessages(
     if (sendingAgentByIndex.has(rawIndex) && !sendingAgentPeer) continue;
     const senderId = senderByIndex.get(rawIndex);
     const participantPeer = sendingAgentPeer || (senderId && resolvedPeers.get(senderId)) || defaultParticipantPeer;
+    const dmMessageId = dmKey ? sharedDmSourceMessageId(rawMessage) : undefined;
     const [message] = extractMessages(
       [rawMessage],
       participantPeer,
@@ -320,9 +347,11 @@ export async function flushMessages(
             openclawMessageId: sourceMessageId,
             ...(runId ? { openclawRunId: runId } : {}),
           }
-        : offset === lastAssistantOffset && runId
-          ? { openclawRunId: runId }
-          : undefined,
+          : dmMessageId
+            ? { openclawMessageId: dmMessageId }
+            : offset === lastAssistantOffset && runId
+              ? { openclawRunId: runId }
+              : undefined,
     );
     if (message) extracted.push({ message, rawIndex });
   }
@@ -385,7 +414,7 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
   ) => {
     const sourceMessageId = ctx.runId ? sourceMessageIdsByRun.get(ctx.runId) : undefined;
     const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
-    const sessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId });
+    const sessionKey = buildSessionKey(dmHookSessionContext({ ...ctx, agentId }, api.config));
     const previous = flushesBySession.get(sessionKey);
     // Detached agent_end and compaction hooks can overlap on the same cursor.
     const current = Promise.resolve(previous).catch(() => undefined).then(() =>
@@ -395,6 +424,32 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
     return current.finally(() => {
       if (flushesBySession.get(sessionKey) === current) flushesBySession.delete(sessionKey);
     });
+  };
+
+  const flushPendingHistory = async (messages: unknown[], ctx: CaptureContext) => {
+    if (!isSharedMainSessionKey(ctx.sessionKey) || usesSharedGroupRouting(api.config)) {
+      return flushCapturedMessages(messages, ctx, true);
+    }
+    messages = await restoreSharedDmMetadata(messages, {
+      ...ctx, agentId: ctx.agentId ?? state.resolveDefaultAgentId(),
+    });
+    const participants = sharedDmParticipants(ctx.sessionKey, messages);
+    if (!participants.size) return flushCapturedMessages(messages, ctx, true);
+
+    // Lifecycle snapshots can omit sender context or contain multiple pending turns.
+    // Use the same queue and checkpoints as agent_end for each proven participant.
+    const writes = await Promise.allSettled([...participants.values()].map((participant) =>
+      flushCapturedMessages(messages, { ...ctx, ...participant, runId: undefined }, true)
+    ));
+    let saved = 0;
+    for (const write of writes) {
+      if (write.status === "rejected") {
+        api.logger.warn?.(`[honcho] Failed to flush pending shared DM history: ${write.reason}`);
+      } else {
+        saved += write.value;
+      }
+    }
+    return saved;
   };
 
   api.on("message_received", (event, ctx) => {
@@ -434,8 +489,10 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
       return;
     }
 
+    let flushCompleted = false;
     try {
       await flushCapturedMessages(event.messages, { ...ctx, runId });
+      flushCompleted = true;
     } catch (error) {
       api.logger.error(`[honcho] Failed to save messages to Honcho: ${error}`);
       if (error instanceof Error) {
@@ -447,11 +504,12 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
     } finally {
       if (runId) sourceMessageIdsByRun.delete(runId);
       if (ctx.sessionKey) pendingSourceMessageIdsBySession.delete(ctx.sessionKey);
-      const sessionKey = buildSessionKey(
-        { sessionKey: ctx.sessionKey, agentId: ctx.agentId },
-        state.resolveDefaultAgentId,
-      );
-      state.turnStartIndex.delete(sessionKey);
+      const keyContext = dmHookSessionContext(ctx, api.config);
+      // A first DM write can fail before any durable checkpoint exists. Keep
+      // its prompt boundary so a lifecycle flush can retry safely.
+      if (flushCompleted || !resolveSharedDmKey(keyContext)) {
+        state.turnStartIndex.delete(buildSessionKey(keyContext, state.resolveDefaultAgentId));
+      }
       if (isSubagentSession(ctx)) subagentParentMap.delete(ctx.sessionKey ?? "");
     }
   });
@@ -466,7 +524,7 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
     if (!event.messages?.length) return;
 
     try {
-      const saved = await flushCapturedMessages(event.messages, ctx, true);
+      const saved = await flushPendingHistory(event.messages, ctx);
       if (saved > 0) {
         api.logger.debug?.(`[honcho] Flushed ${saved} messages before compaction`);
       }
@@ -482,7 +540,7 @@ export function registerCaptureHook(api: OpenClawPluginApi, state: PluginState):
   api.on("before_reset", async (event, ctx) => {
     try {
       if (event.messages?.length) {
-        const saved = await flushCapturedMessages(event.messages, ctx, true);
+        const saved = await flushPendingHistory(event.messages, ctx);
         if (saved > 0) {
           api.logger.debug?.(`[honcho] Flushed ${saved} messages before session reset`);
         }

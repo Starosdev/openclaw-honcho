@@ -110,14 +110,164 @@ export function extractProvider(sessionKey: string): string | null {
   return m ? m[1].toLowerCase() : null;
 }
 
+type HonchoSessionContext = {
+  sessionKey?: string;
+  agentId?: string;
+  channel?: string;
+  messageProvider?: string;
+  senderId?: string;
+};
+
+export function isSharedMainSessionKey(sessionKey?: string): boolean {
+  return /^agent:[^:]+:main$/i.test(normalizeSessionKey(sessionKey));
+}
+
+/** Match the per-channel-peer key for the external DM channels used by Vega. */
+export function resolveSharedDmKey(ctx?: HonchoSessionContext): string | undefined {
+  if (!isSharedMainSessionKey(ctx?.sessionKey)) return;
+  const channel = (ctx?.channel ?? ctx?.messageProvider)?.trim().toLowerCase();
+  const sender = ctx?.senderId?.trim();
+  if ((channel !== "telegram" && channel !== "discord") || !sender || !/^\d+$/.test(sender)) return;
+  return `${normalizeSessionKey(ctx?.sessionKey).slice(0, -5).toLowerCase()}:${channel}:direct:${sender}`;
+}
+
+type HonchoRoutingConfig = { session?: object; bindings?: readonly object[] };
+
+export function toolSessionKeyContext(ctx: {
+  sessionKey?: string;
+  agentId?: string;
+  messageChannel?: string;
+  requesterSenderId?: string;
+  config?: HonchoRoutingConfig;
+}, agentId = ctx.agentId, fallbackConfig?: HonchoRoutingConfig): HonchoSessionContext {
+  return {
+    sessionKey: ctx.sessionKey,
+    agentId,
+    channel: usesSharedGroupRouting(ctx.config) || usesSharedGroupRouting(fallbackConfig)
+      ? undefined
+      : ctx.messageChannel,
+    senderId: ctx.requesterSenderId,
+  };
+}
+
+// OpenClaw 2026.7 SDK types predate groupScope, but Vega can set it at runtime.
+export function usesSharedGroupRouting(config?: HonchoRoutingConfig): boolean {
+  const sharesMain = (session: unknown) =>
+    !!session && typeof session === "object" && "groupScope" in session && session.groupScope === "main";
+  return sharesMain(config?.session) ||
+    config?.bindings?.some((binding) => "session" in binding && sharesMain(binding.session)) === true;
+}
+
+export function dmHookSessionContext(ctx: HonchoSessionContext, config?: HonchoRoutingConfig): HonchoSessionContext {
+  if (!usesSharedGroupRouting(config)) return ctx;
+  return { sessionKey: ctx.sessionKey, agentId: ctx.agentId };
+}
+
+function dmTranscriptRow(message: unknown) {
+  return message as {
+    role?: string;
+    display?: boolean;
+    idempotencyKey?: string;
+    provenance?: { kind?: string };
+    __openclaw?: { senderId?: string; runId?: string; transport?: { channel?: string; messageId?: string } };
+  } | null | undefined;
+}
+
+export function sharedDmSourceMessageId(message: unknown): string | undefined {
+  const row = dmTranscriptRow(message);
+  const messageId = row?.__openclaw?.transport?.messageId;
+  return row?.role === "user" && typeof messageId === "string" ? messageId : undefined;
+}
+
+function persistedDmContext(row: ReturnType<typeof dmTranscriptRow>) {
+  const senderId = row?.__openclaw?.senderId;
+  const channel = row?.__openclaw?.transport?.channel;
+  if (row?.role !== "user" || row.display === false ||
+      (row.provenance && row.provenance.kind !== "external_user") ||
+      typeof senderId !== "string" || typeof channel !== "string") return;
+  return { senderId, channel };
+}
+
+function persistedDmKey(sessionKey: string | undefined, row: ReturnType<typeof dmTranscriptRow>) {
+  const context = persistedDmContext(row);
+  return context && resolveSharedDmKey({ sessionKey, ...context });
+}
+
+function unstampedChannelUserKey(message: unknown): string | undefined {
+  const row = dmTranscriptRow(message);
+  if (row?.role !== "user" || persistedDmContext(row)) return;
+  return row.idempotencyKey?.startsWith("channel-user:v1:") ? row.idempotencyKey : undefined;
+}
+
+export async function restoreSharedDmMetadata(
+  messages: unknown[],
+  ctx: HonchoSessionContext & { sessionId?: string },
+): Promise<unknown[]> {
+  if (!ctx.sessionKey || !ctx.sessionId || !messages.some(unstampedChannelUserKey)) return messages;
+  try {
+    // The embedded runner can rebuild an admitted user with its durable key alone.
+    // @ts-ignore - this reader is provided by the newer Gateway runtime
+    const { readVisibleSessionTranscriptMessageEntries } = await import("openclaw/plugin-sdk/session-transcript-runtime");
+    const entries: Array<{ idempotencyKey?: string; message: unknown }> =
+      await readVisibleSessionTranscriptMessageEntries({
+        agentId: ctx.agentId, sessionKey: ctx.sessionKey, sessionId: ctx.sessionId,
+      });
+    const byKey = new Map(entries.flatMap(({ idempotencyKey, message }) =>
+      idempotencyKey && persistedDmContext(dmTranscriptRow(message)) ? [[idempotencyKey, message]] : []
+    ));
+    return messages.map((message) => {
+      const key = unstampedChannelUserKey(message);
+      return (key && byKey.get(key)) || message;
+    });
+  } catch {
+    // An unreadable transcript cannot establish ownership of an unstamped row.
+    return messages;
+  }
+}
+
+export function hasSharedDmHistory(sessionKey: string | undefined, messages: unknown[]): boolean {
+  return messages.some((message) =>
+    persistedDmKey(sessionKey, dmTranscriptRow(message)) !== undefined || unstampedChannelUserKey(message)
+  );
+}
+
+export function sharedDmParticipants(sessionKey: string | undefined, messages: unknown[]) {
+  const participants = new Map<string, NonNullable<ReturnType<typeof persistedDmContext>>>();
+  for (const message of messages) {
+    const context = persistedDmContext(dmTranscriptRow(message));
+    if (!context) continue;
+    const key = resolveSharedDmKey({ sessionKey, ...context });
+    if (key) participants.set(key, context);
+  }
+  return participants;
+}
+
+/** Project shared history before using per-participant offsets and checkpoints. */
+export function selectSharedDmHistory(sessionKey: string | undefined, dmKey: string, messages: unknown[]): unknown[] {
+  let selected = false;
+  let userRunId: string | undefined;
+  return messages.filter((message) => {
+    const row = dmTranscriptRow(message);
+    if (row?.role === "user") {
+      selected = persistedDmKey(sessionKey, row) === dmKey;
+      userRunId = row.__openclaw?.runId ??
+        (row.idempotencyKey?.endsWith(":user") ? row.idempotencyKey.slice(0, -5) : undefined);
+      return selected;
+    }
+    // A shifted snapshot may start with a reply, and stamped replies can arrive out of order.
+    return selected && row?.role === "assistant" &&
+      (!row.__openclaw?.runId || row.__openclaw.runId === userRunId);
+  });
+}
+
 /**
  * Build a Honcho session id of the form
  * `<sessionClass>-[<provider>-]<agentId>-<24 hex>`.
  *
  * The id is decoupled from OpenClaw's routing-key DSL: prefix segments are
  * derived from the same inputs as the hash, so they cannot drift independently.
- * `ctx.messageProvider` is intentionally not an input — that field is unstable
- * (missing → "unknown") and lives in session metadata instead.
+ * Routed keys are authoritative. Shared main DMs use trusted channel/sender
+ * metadata to derive the equivalent per-channel-peer key.
  *
  * When `ctx.agentId` is undefined, callers should pass `resolveDefaultAgentId`
  * (typically `state.resolveDefaultAgentId`) so the id matches the agent id used
@@ -125,10 +275,10 @@ export function extractProvider(sessionKey: string): string | null {
  * to "main", which only matches workspaces with no configured default agent.
  */
 export function buildSessionKey(
-  ctx?: { sessionKey?: string; agentId?: string },
+  ctx?: HonchoSessionContext,
   resolveDefaultAgentId?: () => string,
 ): string {
-  const normalized = normalizeSessionKey(ctx?.sessionKey);
+  const normalized = resolveSharedDmKey(ctx) ?? normalizeSessionKey(ctx?.sessionKey);
   const sessionClass = classifySession(normalized);
   const agentId = (ctx?.agentId ?? resolveDefaultAgentId?.() ?? "main").toLowerCase();
   const provider = extractProvider(normalized);

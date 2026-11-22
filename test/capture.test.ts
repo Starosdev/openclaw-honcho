@@ -89,6 +89,34 @@ function loggerStub() {
 }
 
 describe("flushMessages metadata", () => {
+  it("keeps the other sender's turns out of a shared DM capture and replay", async () => {
+    const { state, session } = createMockState();
+    const api = { logger: loggerStub() } as never;
+    const ctx = { sessionKey: "agent:main:main", agentId: "main", channel: "telegram", senderId: "222" };
+    const user = (senderId: string, content: string) => ({
+      role: "user", content, idempotencyKey: senderId + ":user",
+      __openclaw: { senderId, transport: { channel: "telegram", messageId: "msg-" + senderId } },
+    });
+    const reply = (runId: string, content: string) => ({ role: "assistant", content, __openclaw: { runId } });
+    const snapshot = [
+      user("111", "Alice input"), reply("111", "Alice reply"),
+      user("222", "Bob input"), reply("111", "Late Alice reply"), reply("222", "Bob reply"),
+    ];
+    state.turnStartIndex.set(buildSessionKey(ctx), 0);
+    expect(await flushMessages(api, state, snapshot, ctx)).toBe(2);
+    expect(session.addMessages).toHaveBeenCalledWith([
+      { text: "Bob input", metadata: { openclawMessageId: "msg-222" } }, { text: "Bob reply" },
+    ]);
+    expect(session.metadata).toMatchObject({
+      openclawSessionKey: "agent:main:main",
+      conversationSessionKey: "agent:main:telegram:direct:222",
+    });
+    expect(await flushMessages(api, state, [snapshot[1], ...snapshot.slice(2)], ctx)).toBe(0);
+    expect(await flushMessages(api, state, snapshot, { sessionKey: ctx.sessionKey }, true)).toBe(0);
+    expect(session.addMessages).toHaveBeenCalledOnce();
+    expect(state.honcho.session).toHaveBeenLastCalledWith(buildSessionKey(ctx));
+  });
+
   it("stores human turns and sessions_send handoffs under separate peers", async () => {
     const { state, session } = createMockState();
     const api = { logger: loggerStub() } as never;
@@ -287,6 +315,45 @@ describe("flushMessages metadata", () => {
 });
 
 describe("registerCaptureHook source IDs", () => {
+  it.each(["before_compaction", "before_reset"])("flushes both pending shared DM turns at %s without hook sender context", async (hook) => {
+    const { state, session: alice } = createMockState();
+    const { session: bob } = createMockState();
+    type Handler = (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown;
+    const handlers = new Map<string, Handler>();
+    registerCaptureHook({
+      logger: loggerStub(),
+      on: (name: string, handler: Handler) => handlers.set(name, handler),
+    } as never, state);
+    const ctx = { agentId: "main", sessionKey: "agent:main:main" };
+    const aliceKey = buildSessionKey({ ...ctx, channel: "telegram", senderId: "111" });
+    const bobKey = buildSessionKey({ ...ctx, channel: "telegram", senderId: "222" });
+    vi.mocked(state.honcho.session).mockImplementation(async (key) => {
+      expect([aliceKey, bobKey]).toContain(key);
+      return (key === aliceKey ? alice : bob) as never;
+    });
+    state.turnStartIndex.set(aliceKey, 0);
+    state.turnStartIndex.set(bobKey, 0);
+    const messages = ["111", "222"].flatMap((senderId) => [
+      { role: "user", content: "Input " + senderId, idempotencyKey: "channel-user:v1:" + senderId,
+        __openclaw: { senderId, transport: { channel: "telegram" } } },
+      { role: "assistant", content: "Reply " + senderId },
+    ]);
+
+    alice.addMessages.mockRejectedValueOnce(new Error("Temporary first-write failure"));
+    await handlers.get("agent_end")?.({ messages, success: true }, {
+      ...ctx, channel: "telegram", senderId: "111",
+    });
+    expect(alice.addMessages).toHaveBeenCalledOnce();
+    expect(alice.metadata).not.toHaveProperty("lastSavedMessageId");
+    alice.addMessages.mockClear();
+
+    await handlers.get(hook)?.({ messages }, ctx);
+    await handlers.get(hook)?.({ messages: messages.slice(1) }, ctx);
+
+    expect(alice.addMessages.mock.calls).toEqual([[[{ text: "Input 111" }, { text: "Reply 111" }]]]);
+    expect(bob.addMessages.mock.calls).toEqual([[[{ text: "Input 222" }, { text: "Reply 222" }]]]);
+  });
+
   it.each(["before_compaction", "before_reset", "agent_end"])("preserves pending human turns at %s after a heartbeat", async (hook) => {
     const { state, session } = createMockState();
     type Handler = (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown;

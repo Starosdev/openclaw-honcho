@@ -157,6 +157,12 @@ In group chats (Discord, Slack, etc.), the plugin extracts the sender's platform
 
 Both message *attribution* (capture) and *context injection* (`before_prompt_build`) read `sender_id` directly from the current inbound message's metadata block, so the right participant peer is used from the very first turn — and on every turn in group chats, even when the speaker changes between turns. Sessions whose channel never emits sender metadata (no `Conversation info` block) stay attributed to `owner`.
 
+## Shared direct-message sessions
+
+On Vega's pinned Gateway, Telegram and Discord DMs that share an OpenClaw main session use a separate Honcho session per channel and trusted sender. Capture, automatic recall, and session-scoped tools use the same session key. Peer mapping and wider recall scope still follow their own settings. Configurations that route groups to main globally or through a binding retain shared-main behavior.
+
+Replay uses persisted sender and channel metadata before applying capture checkpoints. The pinned Gateway can rebuild an in-memory user row with only its idempotency key. Honcho recovers attribution from the matching durable transcript entry. Compaction and reset can flush attributed pending turns even when the hook has no sender. Prior shared Honcho rows remain under their original key.
+
 ## How it works
 
 Once installed, the plugin works automatically:

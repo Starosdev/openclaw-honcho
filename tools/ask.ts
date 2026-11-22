@@ -2,7 +2,7 @@ import { Type } from "@sinclair/typebox";
 // @ts-ignore - resolved by openclaw runtime
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import type { PluginState } from "../state.js";
-import { buildSessionKey, peerRecallOptions } from "../helpers.js";
+import { buildSessionKey, peerRecallOptions, toolSessionKeyContext } from "../helpers.js";
 
 export function registerAskTool(api: OpenClawPluginApi, state: PluginState): void {
   api.registerTool(
@@ -35,7 +35,7 @@ export function registerAskTool(api: OpenClawPluginApi, state: PluginState): voi
         await state.ensureInitialized();
         const agentId = toolCtx.agentId ?? state.resolveDefaultAgentId();
         const agentPeer = await state.getAgentPeer(agentId);
-        const sessionKey = buildSessionKey({ sessionKey: toolCtx.sessionKey, agentId });
+        const sessionKey = buildSessionKey(toolSessionKeyContext(toolCtx, agentId, api.config));
         const participantPeer = await state.resolveToolParticipantPeer(toolCtx);
 
         const reasoningLevel = depth === "thorough" ? "high" : "low";

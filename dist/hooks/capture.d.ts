@@ -9,6 +9,7 @@ type CaptureProvenance = {
 type CaptureContext = Parameters<typeof isSystemRun>[0] & {
     agentId?: string;
     sessionId?: string;
+    channel?: string;
     messageProvider?: string;
     runId?: string;
     sourceMessageId?: string;

@@ -75,6 +75,21 @@ async function askArgs(
 }
 
 describe("recall boundaries are applied per path", () => {
+  it("records the shared DM capture boundary for a short prompt without recalling", async () => {
+    const { state } = mkState({});
+    let handler: ((e: unknown, c: unknown) => Promise<unknown>) | undefined;
+    registerContextHook(
+      { on: (n: string, fn: never) => { if (n === "before_prompt_build") handler = fn; }, logger } as never,
+      state,
+    );
+    const dm = { agentId: "main", sessionKey: "agent:main:main", channel: "telegram", senderId: "222" };
+
+    await handler?.({ prompt: "hi", messages: [] }, dm);
+
+    expect(state.turnStartIndex.get(buildSessionKey(dm))).toBe(0);
+    expect(state.honcho.session).not.toHaveBeenCalled();
+  });
+
   it("preserves the persisted capture checkpoint during prompt recall", async () => {
     const checkpoint = {
       lastSavedMessageId: "k:turn:user",

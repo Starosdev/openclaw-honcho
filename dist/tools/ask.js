@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-import { buildSessionKey, peerRecallOptions } from "../helpers.js";
+import { buildSessionKey, peerRecallOptions, toolSessionKeyContext } from "../helpers.js";
 export function registerAskTool(api, state) {
     api.registerTool((toolCtx) => ({
         name: "honcho_ask",
@@ -20,7 +20,7 @@ export function registerAskTool(api, state) {
             await state.ensureInitialized();
             const agentId = toolCtx.agentId ?? state.resolveDefaultAgentId();
             const agentPeer = await state.getAgentPeer(agentId);
-            const sessionKey = buildSessionKey({ sessionKey: toolCtx.sessionKey, agentId });
+            const sessionKey = buildSessionKey(toolSessionKeyContext(toolCtx, agentId, api.config));
             const participantPeer = await state.resolveToolParticipantPeer(toolCtx);
             const reasoningLevel = depth === "thorough" ? "high" : "low";
             // The model decides when to call this, not a person, so it follows the
