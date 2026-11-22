@@ -2,17 +2,20 @@ import { buildSessionKey, dmHookSessionContext, resolveSharedDmKey, restoreShare
 import { buildDegradedContext, isConnectionFailure } from "../degraded.js";
 export function registerContextHook(api, state) {
     api.on("before_prompt_build", async (event, ctx) => {
-        if (!event.prompt || event.prompt.length < 5)
-            return;
         if (!state.cfg.captureSystemRuns && isSystemRun(ctx))
             return;
         const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
         const keyContext = dmHookSessionContext({ ...ctx, agentId }, api.config);
         const sessionKey = buildSessionKey(keyContext);
         const dmKey = resolveSharedDmKey(keyContext);
+        const recallEligible = event.prompt && event.prompt.length >= 5;
+        if (!dmKey && !recallEligible)
+            return;
         state.turnStartIndex.set(sessionKey, dmKey
             ? selectSharedDmHistory(ctx.sessionKey, dmKey, await restoreSharedDmMetadata(event.messages, { ...ctx, agentId })).length
             : event.messages.length);
+        if (!recallEligible)
+            return;
         const isClawTalk = isClawTalkSession(ctx.sessionKey);
         if (isClawTalk && !ctx.senderId)
             return;
