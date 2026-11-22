@@ -9,14 +9,15 @@ const ctx = { sessionKey: "agent:main:discord:dm:u1", agentId: "main" };
 const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
 function mkState(recall: Record<string, unknown>) {
+  let metadata: Record<string, unknown> = {};
   const session = {
     context: vi.fn(async (_options?: { peerTarget: { id: string } }) => ({
       peerCard: ["fact"],
       peerRepresentation: "rep",
       summary: undefined,
     })),
-    getMetadata: vi.fn(async () => ({})),
-    setMetadata: vi.fn(async () => undefined),
+    getMetadata: vi.fn(async () => metadata),
+    setMetadata: vi.fn(async (next: Record<string, unknown>) => { metadata = next; }),
   };
   const agentPeer = {
     id: "agent-main",
@@ -27,7 +28,10 @@ function mkState(recall: Record<string, unknown>) {
   const peer = { id: "owner" };
   const state = {
     cfg: honchoConfigSchema.parse({ baseUrl: "http://x", recall }),
-    honcho: { session: vi.fn(async () => session) },
+    honcho: { session: vi.fn(async (_key: string, options?: { metadata?: Record<string, unknown> }) => {
+      if (options?.metadata) metadata = options.metadata;
+      return session;
+    }) },
     turnStartIndex: new Map<string, number>(),
     ensureInitialized: vi.fn(async () => undefined),
     getAgentPeer: vi.fn(async () => agentPeer),
@@ -40,15 +44,16 @@ function mkState(recall: Record<string, unknown>) {
 }
 
 /** Run the before_prompt_build hook and return the session.context() arguments. */
-async function runContext(recall: Record<string, unknown>) {
+async function runContext(recall: Record<string, unknown>, metadata?: Record<string, unknown>) {
   const { state, session } = mkState(recall);
+  if (metadata) await session.setMetadata(metadata);
   let handler: ((e: unknown, c: unknown) => Promise<unknown>) | undefined;
   registerContextHook(
     { on: (n: string, fn: never) => { if (n === "before_prompt_build") handler = fn; }, logger } as never,
     state,
   );
   const result = await handler?.({ prompt: "a real prompt", messages: [] }, ctx);
-  return { args: session.context.mock.calls[0]?.[0] ?? {}, result };
+  return { args: session.context.mock.calls[0]?.[0] ?? {}, result, session };
 }
 
 async function contextArgs(recall: Record<string, unknown>) {
@@ -70,6 +75,19 @@ async function askArgs(
 }
 
 describe("recall boundaries are applied per path", () => {
+  it("preserves the persisted capture checkpoint during prompt recall", async () => {
+    const checkpoint = {
+      lastSavedMessageId: "k:turn:user",
+      lastSavedIndex: 3,
+      openclawSessionKey: ctx.sessionKey,
+      participantSenderId: "u1",
+    };
+    const { session } = await runContext({ automatic: "session" }, { ...checkpoint });
+
+    expect(session.context).toHaveBeenCalledOnce();
+    expect(await session.getMetadata()).toEqual(checkpoint);
+  });
+
   it.each([false, true])("only opens Honcho for system recall when opted in (%s)", async (optIn) => {
     const { state } = mkState({});
     state.cfg.captureSystemRuns = honchoConfigSchema.parse(optIn ? { captureSystemRuns: true } : {}).captureSystemRuns;
