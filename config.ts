@@ -97,17 +97,26 @@ function resolveEnvVars(value: string): string {
   });
 }
 
-function httpOrigin(value: string): string {
+function httpOrigin(value: string, originOnly = true): string {
   try {
     const url = new URL(value);
     if ((url.protocol === "https:" || url.protocol === "http:") && !url.username &&
-        !url.password && url.href === `${url.origin}/`) {
+        !url.password && (!originOnly || url.href === `${url.origin}/`)) {
       return url.origin;
     }
   } catch {
     // Avoid including an invalid endpoint that could itself contain credentials.
   }
   throw new Error("Shared Honcho credentials require a valid HTTP(S) origin.");
+}
+
+export function assertRetainedHonchoEndpoint(original: string, selected: string): void {
+  try {
+    if (httpOrigin(original, false) === httpOrigin(selected, false)) return;
+  } catch {
+    // An unparseable endpoint cannot safely receive the retained key.
+  }
+  throw new Error("Retained Honcho credential endpoint conflicts with the configured endpoint. Enter a key for the new origin.");
 }
 
 type SharedCredentials = { apiKey?: unknown; environmentUrl?: unknown };
