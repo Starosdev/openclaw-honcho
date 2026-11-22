@@ -40,6 +40,7 @@ function mkState(recall: Record<string, unknown>) {
     getParticipantPeer: vi.fn(async (senderId: string) => ({ id: senderId })),
     resolveSessionParticipantPeer: vi.fn(async () => peer),
     resolveToolParticipantPeer: vi.fn(async () => peer),
+    assertToolParticipantReadable: vi.fn(async () => {}),
     resolveDefaultAgentId: vi.fn(() => "main"),
   } as unknown as PluginState;
   return { state, session, agentPeer };

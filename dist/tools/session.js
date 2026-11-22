@@ -38,6 +38,7 @@ export function registerSessionTool(api, state) {
                     peerPerspective: agentPeer,
                     representationOptions: searchQuery ? { searchQuery } : undefined,
                 });
+                await state.assertToolParticipantReadable(toolCtx, participantPeer.id);
                 const sections = [];
                 const summary = isOwner && includeSummary ? context.summary?.content || null : null;
                 const peerCard = context.peerCard ?? [];

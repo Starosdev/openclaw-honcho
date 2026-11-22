@@ -46,6 +46,7 @@ export function registerAskTool(api: OpenClawPluginApi, state: PluginState): voi
           reasoningLevel,
           ...peerRecallOptions(state.cfg.recall.ask, state.cfg.recall.scopeName, sessionKey),
         });
+        await state.assertToolParticipantReadable(toolCtx, participantPeer.id);
 
         return {
           content: [{ type: "text", text: answer! }],

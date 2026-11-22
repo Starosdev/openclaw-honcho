@@ -70,6 +70,7 @@ export function registerSessionTool(api: OpenClawPluginApi, state: PluginState):
             peerPerspective: agentPeer,
             representationOptions: searchQuery ? { searchQuery } : undefined,
           });
+          await state.assertToolParticipantReadable(toolCtx, participantPeer.id);
 
           const sections: string[] = [];
 

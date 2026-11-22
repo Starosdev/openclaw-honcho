@@ -106,6 +106,7 @@ export function createPluginState(api) {
         resolveSessionParticipantPeer,
         invalidateSessionParticipantPeer,
         resolveToolParticipantPeer,
+        assertToolParticipantReadable,
         isParticipantPeerId,
         resolveDefaultAgentId,
     };
@@ -258,6 +259,13 @@ export function createPluginState(api) {
         if (requester.senderIsOwner === true)
             return getParticipantPeer();
         throw new Error("Honcho requires a trusted requester identity.");
+    }
+    async function assertToolParticipantReadable(requester, peerId) {
+        if (requester.senderIsOwner === true || isClawTalkSession(requester.sessionKey))
+            return;
+        await refreshOwnerProtection();
+        if (state.ownerPeerIds.has(peerId))
+            throw new Error("Honcho owner memory requires a verified owner.");
     }
     function isParticipantPeerId(peerId) {
         if (state.ownerPeerIds.has(peerId))

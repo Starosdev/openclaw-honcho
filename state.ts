@@ -125,6 +125,7 @@ export type PluginState = {
   /** The participant a tool call reads: the requester OpenClaw names in the tool context,
    * never a model-supplied id. Tools are self-only. */
   resolveToolParticipantPeer: (requester: ToolRequester) => Promise<Peer>;
+  assertToolParticipantReadable: (requester: ToolRequester, peerId: string) => Promise<void>;
   /** Returns true if the given honcho peer ID belongs to a known participant peer. */
   isParticipantPeerId: (peerId: string) => boolean;
   resolveDefaultAgentId: () => string;
@@ -180,6 +181,7 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
     resolveSessionParticipantPeer,
     invalidateSessionParticipantPeer,
     resolveToolParticipantPeer,
+    assertToolParticipantReadable,
     isParticipantPeerId,
     resolveDefaultAgentId,
   };
@@ -331,6 +333,12 @@ export function createPluginState(api: OpenClawPluginApi): PluginState {
     // under the owner peer, so read them back from there.
     if (requester.senderIsOwner === true) return getParticipantPeer();
     throw new Error("Honcho requires a trusted requester identity.");
+  }
+
+  async function assertToolParticipantReadable(requester: ToolRequester, peerId: string): Promise<void> {
+    if (requester.senderIsOwner === true || isClawTalkSession(requester.sessionKey)) return;
+    await refreshOwnerProtection();
+    if (state.ownerPeerIds.has(peerId)) throw new Error("Honcho owner memory requires a verified owner.");
   }
 
   function isParticipantPeerId(peerId: string): boolean {

@@ -211,4 +211,15 @@ describe("tools read the requester's own memory", () => {
     });
     expect(verifiedChannelOwner.id).toBe("vega-owner");
   });
+
+  it("withholds an in-flight tool result when the peer becomes a protected owner", async () => {
+    const { state, createState, peers } = setup();
+    peers.get("111")!.card.mockImplementationOnce(async () => {
+      await createState("111").ensureInitialized();
+      return ["Protected owner fact"];
+    });
+    const lookup = tool(registerContextTool, state, { sessionKey: GROUP_KEY, requesterSenderId: "111" });
+
+    await expect(lookup.execute("id", {})).rejects.toThrow("verified owner");
+  });
 });

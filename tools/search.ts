@@ -64,6 +64,7 @@ export function registerSearchTool(api: OpenClawPluginApi, state: PluginState): 
         } catch (error) {
           api.logger.warn?.(`honcho_search_conclusions: anti-hits skipped: ${error}`);
         }
+        await state.assertToolParticipantReadable(toolCtx, participantPeer.id);
 
         if (!representation) {
           return {
