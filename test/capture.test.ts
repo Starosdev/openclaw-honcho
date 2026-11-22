@@ -89,6 +89,51 @@ function loggerStub() {
 }
 
 describe("flushMessages metadata", () => {
+  it("stores human turns and sessions_send handoffs under separate peers", async () => {
+    const { state, session } = createMockState();
+    const api = { logger: loggerStub() } as never;
+    vi.mocked(state.getParticipantPeer).mockResolvedValue({
+      id: "human-alice",
+      message: (text: string) => ({ text, peer_id: "human-alice" }),
+    } as never);
+    vi.mocked(state.getAgentPeer).mockImplementation(async (id) => ({
+      id: `agent-${id}`,
+      message: (text: string) => ({ text, peer_id: `agent-${id}` }),
+    }) as never);
+    const handoff = { kind: "inter_session", sourceTool: "sessions_send" };
+    const messages = [
+      { role: "user", content: "Human message", __openclaw: { senderId: "alice" } },
+      {
+        role: "user", content: "Historical agent handoff", __openclaw: { senderId: "stale-human" },
+        provenance: { ...handoff, sourceSessionKey: "agent:research:main" },
+      },
+      {
+        role: "user", content: "Handoff without a valid source",
+        provenance: { ...handoff, sourceSessionKey: "agent:invalid" },
+      },
+      { role: "user", content: "Current agent handoff", idempotencyKey: "handoff-run:user" },
+      { role: "assistant", content: "Receiving agent reply" },
+    ];
+    await flushMessages(api, state, messages, {
+      agentId: "main",
+      sessionKey: "agent:main:discord:group:shared",
+      runId: "handoff-run",
+      inputProvenance: { ...handoff, sourceSessionKey: "agent:planner:main" },
+    });
+
+    expect(session.addMessages).toHaveBeenCalledWith([
+      { text: "Human message", peer_id: "human-alice" },
+      { text: "Historical agent handoff", peer_id: "agent-research" },
+      { text: "Current agent handoff", peer_id: "agent-planner" },
+      { text: "Receiving agent reply", peer_id: "agent-main" },
+    ]);
+    expect(session.metadata.participantSenderId).toBe("alice");
+    expect(session.addPeers).toHaveBeenCalledWith(expect.arrayContaining([
+      ["agent-research", { observeMe: true, observeOthers: false }],
+      ["agent-planner", { observeMe: true, observeOthers: false }],
+    ]));
+  });
+
   it("keeps alternating senders separate when a flush includes an older turn", async () => {
     const { state, session, ownerPeer } = createMockState();
     const api = { logger: loggerStub() } as never;
