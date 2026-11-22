@@ -41,10 +41,13 @@ export type RecallConfig = {
     ask: RecallScope;
     scopeName?: string;
 };
-export type HonchoConfig = {
+type HonchoConnection = {
     apiKey?: string;
     workspaceId: string;
     baseUrl: string;
+    sharedCredentials: boolean;
+};
+export type HonchoConfig = HonchoConnection & {
     timeoutMs?: number;
     noisePatterns: string[];
     disableDefaultNoisePatterns: boolean;
@@ -57,6 +60,8 @@ export type HonchoConfig = {
     antiHits: AntiHitsConfig;
     recall: RecallConfig;
 };
+export declare function resolveHonchoConnection(value: unknown): HonchoConnection;
 export declare const honchoConfigSchema: {
     parse(value: unknown): HonchoConfig;
 };
+export {};

@@ -9,6 +9,11 @@
         "type": "string",
         "description": "Honcho API key (or set HONCHO_API_KEY env var)"
       },
+      "enableSharedConfigCredentials": {
+        "type": "boolean",
+        "default": false,
+        "description": "Allow a key and matching endpoint from ~/.honcho/config.json when no plugin or environment key is set."
+      },
       "workspaceId": {
         "type": "string",
         "description": "Honcho workspace ID (defaults to 'openclaw')"
@@ -21,7 +26,7 @@
       },
       "baseUrl": {
         "type": "string",
-        "default": "https://api.honcho.dev"
+        "description": "Honcho endpoint. Defaults to https://api.honcho.dev unless shared credentials are selected."
       }
     }
   },
