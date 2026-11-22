@@ -4,7 +4,7 @@
  * PluginState object that gets passed to every module.
  */
 import { Honcho, type Peer } from "@honcho-ai/sdk";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { type HonchoConfig } from "./config.js";
 import { PeersPersister } from "./peers.js";
 export declare const OWNER_ID = "owner";
