@@ -19,6 +19,7 @@
       "honcho_search_conclusions",
       "honcho_ask",
       "honcho_search_messages",
+      "honcho_workspace_chat",
       "memory_search",
       "memory_get"
     ]
@@ -86,6 +87,11 @@
         "type": "boolean",
         "default": false,
         "description": "Register Honcho's memory_search and memory_get aliases when the host does not supply requester-scoped tools with those names."
+      },
+      "enableWorkspaceChat": {
+        "type": "boolean",
+        "default": false,
+        "description": "Allow verified direct operators to query across the Honcho workspace."
       },
       "recall": {
         "type": "object",
@@ -172,6 +178,11 @@
       "label": "Memory Tool Compatibility Aliases",
       "advanced": true,
       "help": "Enable memory_search and memory_get when the host does not supply requester-scoped equivalents."
+    },
+    "enableWorkspaceChat": {
+      "label": "Operator Workspace Chat",
+      "advanced": true,
+      "help": "Enable workspace-wide answers for verified direct operators. Default: off."
     },
     "recall": {
       "label": "Recall Boundaries",

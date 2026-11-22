@@ -84,6 +84,8 @@ Run `openclaw honcho setup` to configure interactively, or set values directly i
 | `ownerObserveOthers`   | `boolean`  | `false`                    | Whether the owner peer observes agent messages in Honcho's social model. |
 | `peerName`             | `string`   | `owner`                    | Explicit owner peer ID in the Honcho workspace. Use it to reuse an owner peer from another integration. |
 
+`enableWorkspaceChat` defaults to `false`. Set it to `true` to register `honcho_workspace_chat`. Only verified direct operators can use it, and its answers can draw from the entire Honcho workspace. Requester-scoped memory tools keep their existing access rules.
+
 Changing `peerName` leaves historical messages on their original peer. New custom-owner capture requires verified owner attribution. Use requester-aware tools such as `memory_search` and `memory_get` from a verified owner session. Honcho records protected owners as members of the workspace's message-free `openclaw-owner-policy` session. This preserves owner protection after you change or remove `peerName`, including for automatic prompt recall and requester-less memory lookup.
 
 Set `enableSharedConfigCredentials: true` to reuse an `apiKey` and `environmentUrl` from `~/.honcho/config.json`. Plugin configuration and `HONCHO_API_KEY` take priority. The root and `hosts.openclaw` each supply a complete pair. When the file supplies the key, the configured endpoint must match its HTTP(S) origin. Workspace selection remains in OpenClaw. Setup edits the active OpenClaw profile, keeps the shared key in the shared file, and requires a newly entered key to change the origin of an existing authenticated connection.
@@ -208,6 +210,7 @@ The plugin provides 5 tools — 3 data retrieval (cheap, no LLM) and 2 interacti
 | `honcho_search_messages`  | Data | Find specific messages across all sessions. Filter by sender (user/agent/all), date, metadata.   |
 | `honcho_session`         | Data | Current session history and summary. Supports semantic search within the session.               |
 | `honcho_ask`             | Q&A  | Ask Honcho a question about the user. `depth='quick'` for facts, `'thorough'` for synthesis.   |
+| `honcho_workspace_chat`  | Q&A  | Ask about participants, sessions, and agents across the entire workspace. Available to verified direct operators when enabled. |
 
 ## CLI Commands
 
