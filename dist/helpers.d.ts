@@ -9,6 +9,7 @@ export type SessionClass = "chat" | "cron" | "subagent" | "thread" | "unknown";
  * Returns "" for non-message inputs or messages with no text blocks.
  */
 export declare function getRawContent(msg: unknown): string;
+export declare function getMessageIdentity(msg: unknown): string | undefined;
 export declare function normalizeSessionKey(raw?: string): string;
 export declare function isClawTalkSession(sessionKey?: string): boolean;
 /**

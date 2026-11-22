@@ -35,6 +35,23 @@ export function getRawContent(msg: unknown): string {
     .join("\n");
 }
 
+export function getMessageIdentity(msg: unknown): string | undefined {
+  if (!msg || typeof msg !== "object") return undefined;
+  const { idempotencyKey, role, timestamp } = msg as Record<string, unknown>;
+  if (typeof idempotencyKey === "string" && idempotencyKey.length > 0) {
+    return `k:${idempotencyKey}`;
+  }
+
+  const content = getRawContent(msg);
+  const messageRole = typeof role === "string" ? role : "";
+  if (!messageRole && !content) return undefined;
+  const time = typeof timestamp === "number" ? String(timestamp) : "";
+  return `h:${createHash("sha256")
+    .update(`${messageRole}\0${time}\0${content}`)
+    .digest("hex")
+    .slice(0, 24)}`;
+}
+
 export function normalizeSessionKey(raw?: string): string {
   return (raw ?? "default").trim() || "default";
 }

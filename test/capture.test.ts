@@ -426,6 +426,64 @@ describe("registerCaptureHook source IDs", () => {
 });
 
 describe("flushMessages batching", () => {
+  it.each([true, false])("captures a shifted snapshot without skipping new messages (overlap: %s)", async (overlap) => {
+    const { state, session } = createMockState();
+    const api = { logger: loggerStub() } as never;
+    const ctx = { sessionKey: "agent:main:discord:dm:user-1", agentId: "main" };
+    const covered = { role: "assistant", content: "Saved reply", timestamp: 2 };
+    await flushMessages(api, state, [
+      { role: "user", content: "Saved input", idempotencyKey: "old:user" },
+      covered,
+    ], ctx);
+    state.turnStartIndex.set(buildSessionKey(ctx), 2);
+
+    const next = { role: "user", content: "Unsaved input", idempotencyKey: "new:user" };
+    const snapshot = overlap ? [covered, next] : [next];
+    expect(await flushMessages(api, state, snapshot, ctx)).toBe(1);
+    expect(session.addMessages).toHaveBeenNthCalledWith(2, [{ text: "Unsaved input" }]);
+  });
+
+  it("uses a legacy saved index for the first flush, then follows the identity checkpoint", async () => {
+    const { state, session } = createMockState();
+    const api = { logger: loggerStub() } as never;
+    const ctx = { sessionKey: "agent:main:discord:dm:user-1", agentId: "main" };
+    session.metadata.lastSavedIndex = 1;
+    const first = { role: "user", content: "Legacy unsaved input", idempotencyKey: "first:user" };
+    await flushMessages(api, state, [
+      { role: "user", content: "Legacy saved input", idempotencyKey: "legacy:user" },
+      first,
+    ], ctx);
+    expect(session.addMessages).toHaveBeenNthCalledWith(1, [{ text: "Legacy unsaved input" }]);
+
+    await flushMessages(api, state, [
+      { ...first, content: "Reformatted archived input" },
+      { role: "user", content: "Input after upgrade", idempotencyKey: "second:user" },
+    ], ctx);
+    expect(session.addMessages).toHaveBeenNthCalledWith(2, [{ text: "Input after upgrade" }]);
+  });
+
+  it("does not skip an unsaved row between identical fallback identities", async () => {
+    const { state, session } = createMockState();
+    const api = { logger: loggerStub() } as never;
+    const ctx = { sessionKey: "agent:main:discord:dm:user-1", agentId: "main" };
+    const repeated = { role: "assistant", content: "Same reply", timestamp: 3 };
+    await flushMessages(api, state, [
+      { role: "user", content: "Previous input" },
+      { role: "assistant", content: "Previous reply" },
+      repeated,
+    ], ctx);
+
+    await flushMessages(api, state, [
+      repeated,
+      { role: "user", content: "Input between matching replies" },
+      { ...repeated },
+    ], ctx);
+    expect(session.addMessages).toHaveBeenNthCalledWith(2, [
+      { text: "Input between matching replies" },
+      { text: "Same reply" },
+    ]);
+  });
+
   it("captures a marked heartbeat when explicitly opted in", async () => {
     const { state, session } = createMockState();
     state.cfg.captureSystemRuns = honchoConfigSchema.parse({ captureSystemRuns: true }).captureSystemRuns;
@@ -529,11 +587,15 @@ describe("flushMessages batching", () => {
       }),
     ).rejects.toThrow("boom");
 
-    // The watermark was advanced past the first 100 persisted messages, so the
-    // next flush resumes at index 100 instead of re-sending (and duplicating)
-    // the already-saved chunk.
+    // The first chunk and its checkpoint survived. The retry starts with an
+    // overlapping but shorter snapshot, where the old index is out of range.
     expect(session.addMessages).toHaveBeenCalledTimes(2);
     expect(session.setMetadata).toHaveBeenCalledTimes(1);
     expect(session.metadata.lastSavedIndex).toBe(100);
+    expect(await flushMessages(api, state, messages.slice(90), {
+      sessionKey: "agent:main:discord:dm:user-1",
+      agentId: "main",
+    })).toBe(16);
+    expect(session.addMessages).toHaveBeenNthCalledWith(3, session.addMessages.mock.calls[1][0]);
   });
 });
