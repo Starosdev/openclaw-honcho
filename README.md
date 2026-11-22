@@ -151,22 +151,19 @@ Map `sender_id` → Honcho peer ID in `~/.honcho/openclaw-peers.json` (override 
 
 ### Multi-Peer Participants
 
-In group chats (Discord, Slack, etc.), the plugin extracts the sender's platform ID from each inbound message and uses it directly as the Honcho peer ID. This gives every participant — humans and any other bots in the room — their own memory and representation in Honcho, rather than attributing all non-agent messages to a single generic peer.
+Honcho attributes captured messages to sender peers in group chats and DMs. Capture uses the Gateway's `ctx.senderId` for the user row that matches the current run. For other rows, it uses each row's persisted sender ID when available. Ordinary capture can fall back to `sender_id` in the legacy "Conversation info (untrusted metadata)" text block when structured identity is absent.
 
-**How it works:**
-- The plugin reads the `sender_id` field from OpenClaw's "Conversation info (untrusted metadata):" block, which OpenClaw injects on every inbound message that has a known sender — including 1-on-1 DMs on platforms like Telegram, not just group chats.
-- Each distinct sender ID becomes its own Honcho peer (e.g., `U07KX7DG002` becomes the Honcho peer ID directly, sanitized to `[A-Za-z0-9_-]`). You can alias a sender to a friendlier peer ID by editing the [peers file](#peer-mappings).
-- The default `owner` peer is used as a fallback when a message has no sender metadata at all (e.g., synthetic/system messages, or channel integrations that don't emit a `Conversation info` block), and — on legacy installs whose peers file uses `defaultUnknownPolicy: "owner"` — for any unknown sender. On fresh installs (`per-sender` policy) and platforms like Telegram, even DMs are attributed to the sender's own peer, not `owner`.
-- Each OpenClaw agent gets its own Honcho peer (default `agent-{id}`, e.g., `agent-main`).
-- All tools (`honcho_context`, `honcho_ask`, etc.) automatically resolve the correct peer for the current session.
-
-Both message *attribution* (capture) and *context injection* (`before_prompt_build`) read `sender_id` directly from the current inbound message's metadata block, so the right participant peer is used from the very first turn — and on every turn in group chats, even when the speaker changes between turns. Sessions whose channel never emits sender metadata (no `Conversation info` block) stay attributed to `owner`.
+Automatic recall prefers the current run's structured sender when choosing a peer. Requester-aware tools resolve the peer from trusted Gateway tool context. The [peers file](#peer-mappings) controls aliases and the policy for unknown senders. A fresh install uses `per-sender`, while the legacy `owner` policy groups unknown senders under `owner`. Ordinary capture can fall back to `owner` for rows without a sender. Verified owners can use the optional `peerName`. Existing stored rows keep their original peer IDs. Each OpenClaw agent has its own peer, typically `agent-{id}`.
 
 ## Shared direct-message sessions
 
 On Vega's pinned Gateway, Telegram and Discord DMs that share an OpenClaw main session use a separate Honcho session per channel and trusted sender. Capture, automatic recall, and session-scoped tools use the same session key. Peer mapping and wider recall scope still follow their own settings. Configurations that route groups to main globally or through a binding retain shared-main behavior.
 
-Replay uses persisted sender and channel metadata before applying capture checkpoints. The pinned Gateway can rebuild an in-memory user row with only its idempotency key. Honcho recovers attribution from the matching durable transcript entry. Compaction and reset can flush attributed pending turns even when the hook has no sender. Prior shared Honcho rows remain under their original key.
+Replay selects each sender's turns using persisted sender and channel metadata before applying capture checkpoints. When the pinned Gateway rebuilds an in-memory user row with only its idempotency key, Honcho looks up the matching durable transcript entry. Compaction and reset can flush each sender's attributed pending turns even when the hook has no sender. Prior shared Honcho rows remain under their original key.
+
+## ClawTalk capture on Vega
+
+Vega assigns Honcho to `plugins.slots.memory` with the value `openclaw-honcho`. ClawTalk capture uses the verified device's own Honcho peer. For each captured turn, the matching user message row carries both `openclawMessageId` and `openclawRunId`. Before writing the user message on replay or retry, capture checks for a row with both IDs in the Honcho session and skips the duplicate.
 
 ## How it works
 
@@ -174,7 +171,7 @@ Once installed, the plugin works automatically:
 
 - **Message Observation** — After every AI turn, the conversation is persisted to Honcho. Both user and agent messages are observed, allowing Honcho to build and refine its models. Message capture starts when the plugin is active for a session, and preserves original timestamps for captured messages. Messages are also flushed before session compaction and `/new`/`/reset`, so no conversation data is lost.
 - **Tool-Based Context Access** — The AI can query Honcho mid-conversation using tools like `honcho_context`, `honcho_search_conclusions`, and `honcho_ask` to retrieve relevant context about the user. Context is injected during OpenClaw's `before_prompt_build` phase, ensuring accurate turn boundaries.
-- **Multi-Peer Model** — Honcho maintains separate representations for each participant. Whenever an inbound message carries a `sender_id` (group chats, and DMs on platforms like Telegram), that sender gets their own peer, using their platform ID directly as the Honcho peer ID (or aliased via the [peers file](#peer-mappings) if configured). Each OpenClaw agent gets its own Honcho peer (default `agent-{id}`). The default `owner` peer is used as a fallback when a channel emits no sender metadata, and — on legacy installs whose peers file uses `defaultUnknownPolicy: "owner"` — for any unknown sender. **Migration boundary:** historical turns already attributed to `owner` (or to any prior peer ID) are not retroactively re-attributed when the plugin upgrades or when `peers` / `defaultUnknownPolicy` change. Only new inbound `sender_id`s create per-sender peers, so pre-existing sessions may show mixed attribution across the rollout. This gives every participant isolated, personalized memory going forward.
+- **Multi-Peer Model.** Honcho maintains separate representations for the peers associated with each participant and agent. See [sender attribution](#multi-peer-participants) for how capture, recall, and tools choose peers.
 - **Clean Persistence** — Platform metadata (conversation info, sender headers, thread context, forwarded messages) is stripped before saving to Honcho, ensuring only meaningful content is persisted. Noise messages (heartbeat acks, cron boilerplate, startup commands) are dropped entirely via configurable pattern filters.
 
 Honcho handles all reasoning and synthesis in the cloud.
