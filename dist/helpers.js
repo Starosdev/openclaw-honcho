@@ -104,18 +104,21 @@ export function resolveSharedDmKey(ctx) {
         return;
     return `${normalizeSessionKey(ctx?.sessionKey).slice(0, -5).toLowerCase()}:${channel}:direct:${sender}`;
 }
-export function toolSessionKeyContext(ctx, agentId = ctx.agentId) {
+export function toolSessionKeyContext(ctx, agentId = ctx.agentId, fallbackConfig) {
     return {
         sessionKey: ctx.sessionKey,
         agentId,
-        channel: usesSharedGroupRouting(ctx.config) ? undefined : ctx.messageChannel,
+        channel: usesSharedGroupRouting(ctx.config) || usesSharedGroupRouting(fallbackConfig)
+            ? undefined
+            : ctx.messageChannel,
         senderId: ctx.requesterSenderId,
     };
 }
 // OpenClaw 2026.7 SDK types predate groupScope, but Vega can set it at runtime.
 export function usesSharedGroupRouting(config) {
-    const session = config?.session;
-    return !!session && "groupScope" in session && session.groupScope === "main";
+    const sharesMain = (session) => !!session && typeof session === "object" && "groupScope" in session && session.groupScope === "main";
+    return sharesMain(config?.session) ||
+        config?.bindings?.some((binding) => "session" in binding && sharesMain(binding.session)) === true;
 }
 export function dmHookSessionContext(ctx, config) {
     if (!usesSharedGroupRouting(config))
@@ -130,17 +133,60 @@ export function sharedDmSourceMessageId(message) {
     const messageId = row?.__openclaw?.transport?.messageId;
     return row?.role === "user" && typeof messageId === "string" ? messageId : undefined;
 }
-function persistedDmKey(sessionKey, row) {
+function persistedDmContext(row) {
     const senderId = row?.__openclaw?.senderId;
     const channel = row?.__openclaw?.transport?.channel;
     if (row?.role !== "user" || row.display === false ||
         (row.provenance && row.provenance.kind !== "external_user") ||
         typeof senderId !== "string" || typeof channel !== "string")
         return;
-    return resolveSharedDmKey({ sessionKey, senderId, channel });
+    return { senderId, channel };
+}
+function persistedDmKey(sessionKey, row) {
+    const context = persistedDmContext(row);
+    return context && resolveSharedDmKey({ sessionKey, ...context });
+}
+function unstampedChannelUserKey(message) {
+    const row = dmTranscriptRow(message);
+    if (row?.role !== "user" || persistedDmContext(row))
+        return;
+    return row.idempotencyKey?.startsWith("channel-user:v1:") ? row.idempotencyKey : undefined;
+}
+export async function restoreSharedDmMetadata(messages, ctx) {
+    if (!ctx.sessionKey || !ctx.sessionId || !messages.some(unstampedChannelUserKey))
+        return messages;
+    try {
+        // The embedded runner can rebuild an admitted user with its durable key alone.
+        // @ts-ignore - this reader is provided by the newer Gateway runtime
+        const { readVisibleSessionTranscriptMessageEntries } = await import("openclaw/plugin-sdk/session-transcript-runtime");
+        const entries = await readVisibleSessionTranscriptMessageEntries({
+            agentId: ctx.agentId, sessionKey: ctx.sessionKey, sessionId: ctx.sessionId,
+        });
+        const byKey = new Map(entries.flatMap(({ idempotencyKey, message }) => idempotencyKey && persistedDmContext(dmTranscriptRow(message)) ? [[idempotencyKey, message]] : []));
+        return messages.map((message) => {
+            const key = unstampedChannelUserKey(message);
+            return (key && byKey.get(key)) || message;
+        });
+    }
+    catch {
+        // An unreadable transcript cannot establish ownership of an unstamped row.
+        return messages;
+    }
 }
 export function hasSharedDmHistory(sessionKey, messages) {
-    return messages.some((message) => persistedDmKey(sessionKey, dmTranscriptRow(message)) !== undefined);
+    return messages.some((message) => persistedDmKey(sessionKey, dmTranscriptRow(message)) !== undefined || unstampedChannelUserKey(message));
+}
+export function sharedDmParticipants(sessionKey, messages) {
+    const participants = new Map();
+    for (const message of messages) {
+        const context = persistedDmContext(dmTranscriptRow(message));
+        if (!context)
+            continue;
+        const key = resolveSharedDmKey({ sessionKey, ...context });
+        if (key)
+            participants.set(key, context);
+    }
+    return participants;
 }
 /** Project shared history before using per-participant offsets and checkpoints. */
 export function selectSharedDmHistory(sessionKey, dmKey, messages) {

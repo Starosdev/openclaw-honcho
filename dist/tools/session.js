@@ -25,7 +25,7 @@ export function registerSessionTool(api, state) {
             const { includeMessages = true, includeSummary = true, searchQuery, messageLimit = 4000, } = params;
             await state.ensureInitialized();
             const agentPeer = await state.getAgentPeer(toolCtx.agentId);
-            const sessionKey = buildSessionKey(toolSessionKeyContext(toolCtx), state.resolveDefaultAgentId);
+            const sessionKey = buildSessionKey(toolSessionKeyContext(toolCtx, toolCtx.agentId, api.config), state.resolveDefaultAgentId);
             const participantPeer = await state.resolveToolParticipantPeer(toolCtx);
             try {
                 const session = await state.honcho.session(sessionKey);

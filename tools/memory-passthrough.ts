@@ -103,7 +103,7 @@ export function registerMemoryPassthrough(api: OpenClawPluginApi, state: PluginS
         readNumberParam(p, "minScore");
         const crossSessionSearch = typeof p.crossSessionSearch === "boolean" ? p.crossSessionSearch : undefined;
         const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
-        const honchoSessionKey = buildSessionKey(toolSessionKeyContext(ctx, agentId));
+        const honchoSessionKey = buildSessionKey(toolSessionKeyContext(ctx, agentId, api.config));
 
         try {
           const { manager } = await getHonchoMemorySearchManager(state, {
@@ -144,7 +144,7 @@ export function registerMemoryPassthrough(api: OpenClawPluginApi, state: PluginS
         const from = readNumberParam(p, "from", { integer: true });
         const lines = readNumberParam(p, "lines", { integer: true });
         const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
-        const honchoSessionKey = buildSessionKey(toolSessionKeyContext(ctx, agentId));
+        const honchoSessionKey = buildSessionKey(toolSessionKeyContext(ctx, agentId, api.config));
 
         try {
           const { manager } = await getHonchoMemorySearchManager(state, {

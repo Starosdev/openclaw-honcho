@@ -35,7 +35,7 @@ export function registerAskTool(api: OpenClawPluginApi, state: PluginState): voi
         await state.ensureInitialized();
         const agentId = toolCtx.agentId ?? state.resolveDefaultAgentId();
         const agentPeer = await state.getAgentPeer(agentId);
-        const sessionKey = buildSessionKey(toolSessionKeyContext(toolCtx, agentId));
+        const sessionKey = buildSessionKey(toolSessionKeyContext(toolCtx, agentId, api.config));
         const participantPeer = await state.resolveToolParticipantPeer(toolCtx);
 
         const reasoningLevel = depth === "thorough" ? "high" : "low";

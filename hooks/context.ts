@@ -5,6 +5,7 @@ import {
   buildSessionKey,
   dmHookSessionContext,
   resolveSharedDmKey,
+  restoreSharedDmMetadata,
   selectSharedDmHistory,
   extractSenderId,
   isClawTalkSession,
@@ -26,7 +27,8 @@ export function registerContextHook(api: OpenClawPluginApi, state: PluginState):
 
     const dmKey = resolveSharedDmKey(keyContext);
     state.turnStartIndex.set(sessionKey, dmKey
-      ? selectSharedDmHistory(ctx.sessionKey, dmKey, event.messages).length
+      ? selectSharedDmHistory(ctx.sessionKey, dmKey,
+        await restoreSharedDmMetadata(event.messages, { ...ctx, agentId })).length
       : event.messages.length);
     const isClawTalk = isClawTalkSession(ctx.sessionKey);
     if (isClawTalk && !ctx.senderId) return;

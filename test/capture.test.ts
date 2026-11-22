@@ -315,6 +315,37 @@ describe("flushMessages metadata", () => {
 });
 
 describe("registerCaptureHook source IDs", () => {
+  it.each(["before_compaction", "before_reset"])("flushes both pending shared DM turns at %s without hook sender context", async (hook) => {
+    const { state, session: alice } = createMockState();
+    const { session: bob } = createMockState();
+    type Handler = (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown;
+    const handlers = new Map<string, Handler>();
+    registerCaptureHook({
+      logger: loggerStub(),
+      on: (name: string, handler: Handler) => handlers.set(name, handler),
+    } as never, state);
+    const ctx = { agentId: "main", sessionKey: "agent:main:main" };
+    const aliceKey = buildSessionKey({ ...ctx, channel: "telegram", senderId: "111" });
+    const bobKey = buildSessionKey({ ...ctx, channel: "telegram", senderId: "222" });
+    vi.mocked(state.honcho.session).mockImplementation(async (key) => {
+      expect([aliceKey, bobKey]).toContain(key);
+      return (key === aliceKey ? alice : bob) as never;
+    });
+    state.turnStartIndex.set(aliceKey, 0);
+    state.turnStartIndex.set(bobKey, 0);
+    const messages = ["111", "222"].flatMap((senderId) => [
+      { role: "user", content: "Input " + senderId, idempotencyKey: "channel-user:v1:" + senderId,
+        __openclaw: { senderId, transport: { channel: "telegram" } } },
+      { role: "assistant", content: "Reply " + senderId },
+    ]);
+
+    await handlers.get(hook)?.({ messages }, ctx);
+    await handlers.get(hook)?.({ messages: messages.slice(1) }, ctx);
+
+    expect(alice.addMessages.mock.calls).toEqual([[[{ text: "Input 111" }, { text: "Reply 111" }]]]);
+    expect(bob.addMessages.mock.calls).toEqual([[[{ text: "Input 222" }, { text: "Reply 222" }]]]);
+  });
+
   it.each(["before_compaction", "before_reset", "agent_end"])("preserves pending human turns at %s after a heartbeat", async (hook) => {
     const { state, session } = createMockState();
     type Handler = (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown;

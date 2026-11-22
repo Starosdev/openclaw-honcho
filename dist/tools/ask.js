@@ -20,7 +20,7 @@ export function registerAskTool(api, state) {
             await state.ensureInitialized();
             const agentId = toolCtx.agentId ?? state.resolveDefaultAgentId();
             const agentPeer = await state.getAgentPeer(agentId);
-            const sessionKey = buildSessionKey(toolSessionKeyContext(toolCtx, agentId));
+            const sessionKey = buildSessionKey(toolSessionKeyContext(toolCtx, agentId, api.config));
             const participantPeer = await state.resolveToolParticipantPeer(toolCtx);
             const reasoningLevel = depth === "thorough" ? "high" : "low";
             // The model decides when to call this, not a person, so it follows the

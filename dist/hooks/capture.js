@@ -1,6 +1,6 @@
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { OWNER_ID } from "../state.js";
-import { buildSessionKey, dmHookSessionContext, hasSharedDmHistory, isSharedMainSessionKey, resolveSharedDmKey, selectSharedDmHistory, sharedDmSourceMessageId, usesSharedGroupRouting, classifySession, isClawTalkSession, isSystemRun, isSubagentSession, normalizeSessionKey, extractMessages, extractSenderId, getMessageIdentity, getRawContent, } from "../helpers.js";
+import { buildSessionKey, dmHookSessionContext, hasSharedDmHistory, isSharedMainSessionKey, resolveSharedDmKey, restoreSharedDmMetadata, selectSharedDmHistory, sharedDmParticipants, sharedDmSourceMessageId, usesSharedGroupRouting, classifySession, isClawTalkSession, isSystemRun, isSubagentSession, normalizeSessionKey, extractMessages, extractSenderId, getMessageIdentity, getRawContent, } from "../helpers.js";
 import { subagentParentMap } from "./subagent.js";
 function systemMessageIndexes(messages, ctx) {
     const entries = messages.map((message) => {
@@ -57,7 +57,7 @@ export async function flushMessages(api, state, messages, ctx, preservePendingHi
     const keyContext = dmHookSessionContext({ ...ctx, agentId }, api.config);
     const dmKey = resolveSharedDmKey(keyContext);
     if (dmKey) {
-        messages = selectSharedDmHistory(ctx.sessionKey, dmKey, messages);
+        messages = selectSharedDmHistory(ctx.sessionKey, dmKey, await restoreSharedDmMetadata(messages, { ...ctx, agentId }));
         if (!messages.length)
             return 0;
     }
@@ -351,6 +351,30 @@ export function registerCaptureHook(api, state) {
                 flushesBySession.delete(sessionKey);
         });
     };
+    const flushPendingHistory = async (messages, ctx) => {
+        if (!isSharedMainSessionKey(ctx.sessionKey) || usesSharedGroupRouting(api.config)) {
+            return flushCapturedMessages(messages, ctx, true);
+        }
+        messages = await restoreSharedDmMetadata(messages, {
+            ...ctx, agentId: ctx.agentId ?? state.resolveDefaultAgentId(),
+        });
+        const participants = sharedDmParticipants(ctx.sessionKey, messages);
+        if (!participants.size)
+            return flushCapturedMessages(messages, ctx, true);
+        // Lifecycle snapshots can omit sender context or contain multiple pending turns.
+        // Use the same queue and checkpoints as agent_end for each proven participant.
+        const writes = await Promise.allSettled([...participants.values()].map((participant) => flushCapturedMessages(messages, { ...ctx, ...participant, runId: undefined }, true)));
+        let saved = 0;
+        for (const write of writes) {
+            if (write.status === "rejected") {
+                api.logger.warn?.(`[honcho] Failed to flush pending shared DM history: ${write.reason}`);
+            }
+            else {
+                saved += write.value;
+            }
+        }
+        return saved;
+    };
     api.on("message_received", (event, ctx) => {
         if (!state.cfg.captureSystemRuns && isSystemRun(ctx))
             return;
@@ -429,7 +453,7 @@ export function registerCaptureHook(api, state) {
         if (!event.messages?.length)
             return;
         try {
-            const saved = await flushCapturedMessages(event.messages, ctx, true);
+            const saved = await flushPendingHistory(event.messages, ctx);
             if (saved > 0) {
                 api.logger.debug?.(`[honcho] Flushed ${saved} messages before compaction`);
             }
@@ -445,7 +469,7 @@ export function registerCaptureHook(api, state) {
     api.on("before_reset", async (event, ctx) => {
         try {
             if (event.messages?.length) {
-                const saved = await flushCapturedMessages(event.messages, ctx, true);
+                const saved = await flushPendingHistory(event.messages, ctx);
                 if (saved > 0) {
                     api.logger.debug?.(`[honcho] Flushed ${saved} messages before session reset`);
                 }

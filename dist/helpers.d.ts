@@ -45,23 +45,28 @@ type HonchoSessionContext = {
 export declare function isSharedMainSessionKey(sessionKey?: string): boolean;
 /** Match the per-channel-peer key for the external DM channels used by Vega. */
 export declare function resolveSharedDmKey(ctx?: HonchoSessionContext): string | undefined;
+type HonchoRoutingConfig = {
+    session?: object;
+    bindings?: readonly object[];
+};
 export declare function toolSessionKeyContext(ctx: {
     sessionKey?: string;
     agentId?: string;
     messageChannel?: string;
     requesterSenderId?: string;
-    config?: {
-        session?: object;
-    };
-}, agentId?: string): HonchoSessionContext;
-export declare function usesSharedGroupRouting(config?: {
-    session?: object;
-}): boolean;
-export declare function dmHookSessionContext(ctx: HonchoSessionContext, config?: {
-    session?: object;
-}): HonchoSessionContext;
+    config?: HonchoRoutingConfig;
+}, agentId?: string, fallbackConfig?: HonchoRoutingConfig): HonchoSessionContext;
+export declare function usesSharedGroupRouting(config?: HonchoRoutingConfig): boolean;
+export declare function dmHookSessionContext(ctx: HonchoSessionContext, config?: HonchoRoutingConfig): HonchoSessionContext;
 export declare function sharedDmSourceMessageId(message: unknown): string | undefined;
+export declare function restoreSharedDmMetadata(messages: unknown[], ctx: HonchoSessionContext & {
+    sessionId?: string;
+}): Promise<unknown[]>;
 export declare function hasSharedDmHistory(sessionKey: string | undefined, messages: unknown[]): boolean;
+export declare function sharedDmParticipants(sessionKey: string | undefined, messages: unknown[]): Map<string, {
+    senderId: string;
+    channel: string;
+}>;
 /** Project shared history before using per-participant offsets and checkpoints. */
 export declare function selectSharedDmHistory(sessionKey: string | undefined, dmKey: string, messages: unknown[]): unknown[];
 /**

@@ -83,7 +83,7 @@ export function registerMemoryPassthrough(api, state) {
             readNumberParam(p, "minScore");
             const crossSessionSearch = typeof p.crossSessionSearch === "boolean" ? p.crossSessionSearch : undefined;
             const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
-            const honchoSessionKey = buildSessionKey(toolSessionKeyContext(ctx, agentId));
+            const honchoSessionKey = buildSessionKey(toolSessionKeyContext(ctx, agentId, api.config));
             try {
                 const { manager } = await getHonchoMemorySearchManager(state, {
                     agentId,
@@ -119,7 +119,7 @@ export function registerMemoryPassthrough(api, state) {
             const from = readNumberParam(p, "from", { integer: true });
             const lines = readNumberParam(p, "lines", { integer: true });
             const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
-            const honchoSessionKey = buildSessionKey(toolSessionKeyContext(ctx, agentId));
+            const honchoSessionKey = buildSessionKey(toolSessionKeyContext(ctx, agentId, api.config));
             try {
                 const { manager } = await getHonchoMemorySearchManager(state, {
                     agentId,

@@ -1,4 +1,4 @@
-import { buildSessionKey, dmHookSessionContext, resolveSharedDmKey, selectSharedDmHistory, extractSenderId, isClawTalkSession, isSystemRun, isSubagentSession, peerRecallOptions, sessionRecallOptions, } from "../helpers.js";
+import { buildSessionKey, dmHookSessionContext, resolveSharedDmKey, restoreSharedDmMetadata, selectSharedDmHistory, extractSenderId, isClawTalkSession, isSystemRun, isSubagentSession, peerRecallOptions, sessionRecallOptions, } from "../helpers.js";
 import { buildDegradedContext, isConnectionFailure } from "../degraded.js";
 export function registerContextHook(api, state) {
     api.on("before_prompt_build", async (event, ctx) => {
@@ -11,7 +11,7 @@ export function registerContextHook(api, state) {
         const sessionKey = buildSessionKey(keyContext);
         const dmKey = resolveSharedDmKey(keyContext);
         state.turnStartIndex.set(sessionKey, dmKey
-            ? selectSharedDmHistory(ctx.sessionKey, dmKey, event.messages).length
+            ? selectSharedDmHistory(ctx.sessionKey, dmKey, await restoreSharedDmMetadata(event.messages, { ...ctx, agentId })).length
             : event.messages.length);
         const isClawTalk = isClawTalkSession(ctx.sessionKey);
         if (isClawTalk && !ctx.senderId)

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSessionKey,
+  dmHookSessionContext,
   toolSessionKeyContext,
   classifySession,
   extractSenderId,
@@ -27,6 +28,14 @@ describe("buildSessionKey", () => {
       sessionKey: dm.sessionKey, agentId: dm.agentId, messageChannel: dm.channel, requesterSenderId: dm.senderId,
       config: { session: { groupScope: "main" } },
     }))).toBe(buildSessionKey({ sessionKey: dm.sessionKey, agentId: dm.agentId }));
+    const bindingConfig = { bindings: [{
+      agentId: "main", match: { channel: "telegram" }, session: { groupScope: "main" },
+    }] };
+    const legacy = buildSessionKey({ sessionKey: dm.sessionKey, agentId: dm.agentId });
+    expect(buildSessionKey(dmHookSessionContext(dm, bindingConfig))).toBe(legacy);
+    expect(buildSessionKey(toolSessionKeyContext({
+      sessionKey: dm.sessionKey, agentId: dm.agentId, messageChannel: dm.channel, requesterSenderId: dm.senderId,
+    }, dm.agentId, bindingConfig))).toBe(legacy);
     const routed = { sessionKey: "agent:main:clawtalk-user:fixture", agentId: "main" };
     expect(buildSessionKey({ ...dm, ...routed })).toBe(buildSessionKey(routed));
   });
