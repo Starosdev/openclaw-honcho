@@ -89,6 +89,48 @@ function loggerStub() {
 }
 
 describe("flushMessages metadata", () => {
+  it("keeps alternating senders separate when a flush includes an older turn", async () => {
+    const { state, session, ownerPeer } = createMockState();
+    const api = { logger: loggerStub() } as never;
+    const group = { sessionKey: "agent:main:discord:group:shared", agentId: "main" };
+    vi.mocked(state.getParticipantPeer).mockImplementation(async (senderId) => (
+      senderId
+        ? { id: senderId, message: (text: string) => ({ text, peer_id: senderId }) } as never
+        : ownerPeer as never
+    ));
+    const messages = [
+      {
+        role: "user",
+        content: `${metadataBlock({ sender_id: "U-bob" })}\n\nOlder Alice message`,
+        __openclaw: { senderId: "U-alice" },
+      },
+      {
+        role: "user",
+        content: `${metadataBlock({ sender_id: "U-alice" })}\n\nCurrent Bob message`,
+        idempotencyKey: "bob-run:user",
+      },
+    ];
+    await flushMessages(api, state, messages, { ...group, senderId: "U-bob", runId: "bob-run" });
+    expect(session.addMessages).toHaveBeenNthCalledWith(1, [
+      { text: "Older Alice message", peer_id: "U-alice" },
+      { text: "Current Bob message", peer_id: "U-bob" },
+    ]);
+    expect(session.metadata.participantSenderId).toBe("U-bob");
+
+    await flushMessages(api, state, [
+      ...messages,
+      {
+        role: "user",
+        content: `${metadataBlock({ sender_id: "U-bob" })}\n\nCurrent Alice message`,
+        __openclaw: { runId: "alice-run" },
+      },
+    ], { ...group, senderId: "U-alice", runId: "alice-run" });
+    expect(session.addMessages).toHaveBeenNthCalledWith(2, [
+      { text: "Current Alice message", peer_id: "U-alice" },
+    ]);
+    expect(session.metadata.participantSenderId).toBe("U-alice");
+  });
+
   it("writes openclawSessionKey, sessionClass, messageProvider, and lastSessionId", async () => {
     const { state, session } = createMockState();
     const api = { logger: loggerStub() } as never;
