@@ -484,6 +484,38 @@ describe("flushMessages batching", () => {
     ]);
   });
 
+  it.each([
+    "agent:main:active-memory:0123456789ab",
+    "agent:main:clawtalk-user:fixture:active-memory:0123456789ab",
+  ])("skips recall capture with system-run capture enabled (%s)", async (sessionKey) => {
+    const { state, session } = createMockState();
+    state.cfg.captureSystemRuns = true;
+    const messages = [
+      { role: "user", content: "Synthetic recall prompt" },
+      { role: "assistant", content: "Synthetic recall result" },
+    ];
+    const saved = await flushMessages({ logger: loggerStub() } as never, state, messages, {
+      sessionKey, agentId: "main", runId: "active-memory-fixture", trigger: "manual",
+    });
+
+    expect(saved).toBe(0);
+    expect(state.ensureInitialized).not.toHaveBeenCalled();
+    expect(state.honcho.session).not.toHaveBeenCalled();
+    expect(session.addMessages).not.toHaveBeenCalled();
+  });
+
+  it("keeps normal capture when a session key only resembles a recall key", async () => {
+    const { state, session } = createMockState();
+    const saved = await flushMessages({ logger: loggerStub() } as never, state,
+      [{ role: "user", content: "Normal conversation input" }], {
+        sessionKey: "agent:main:discord:group:active-memory:0123456789ab:thread:42",
+        agentId: "main",
+      });
+
+    expect(saved).toBe(1);
+    expect(session.addMessages).toHaveBeenCalledOnce();
+  });
+
   it("captures a marked heartbeat when explicitly opted in", async () => {
     const { state, session } = createMockState();
     state.cfg.captureSystemRuns = honchoConfigSchema.parse({ captureSystemRuns: true }).captureSystemRuns;

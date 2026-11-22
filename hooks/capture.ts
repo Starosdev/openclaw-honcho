@@ -85,11 +85,14 @@ export async function flushMessages(
 ): Promise<number> {
   if (!messages?.length) return 0;
 
+  const openclawSessionKey = normalizeSessionKey(ctx.sessionKey);
+  // OpenClaw appends this suffix to lookup runs. Skip capture even when system runs are enabled.
+  if (/(?:^|:)active-memory:[a-f0-9]{12}$/i.test(openclawSessionKey)) return 0;
+
   const agentId = ctx.agentId ?? state.resolveDefaultAgentId();
   const sessionKey = buildSessionKey({ sessionKey: ctx.sessionKey, agentId });
   const isSubagent = isSubagentSession(ctx);
   const parentAgentId = isSubagent ? subagentParentMap.get(ctx.sessionKey ?? "") : undefined;
-  const openclawSessionKey = normalizeSessionKey(ctx.sessionKey);
   const sessionClass = classifySession(openclawSessionKey);
   const filterSystemRuns = !state.cfg.captureSystemRuns;
   const systemRun = filterSystemRuns && isSystemRun(ctx);
